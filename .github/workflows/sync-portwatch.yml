@@ -6,11 +6,22 @@ on:
     # Run a few hours after to be safe, and re-check midweek in case of late corrections.
     - cron: "0 18 * * 2"  # Tuesday 18:00 UTC
     - cron: "0 6 * * 5"   # Friday 06:00 UTC (safety net for revisions)
-  workflow_dispatch: {}    # manual "Run workflow" button
+  workflow_dispatch:       # manual "Run workflow" button, with overrides
+    inputs:
+      sync_since_days:
+        description: "Days of port/chokepoint daily-activity history to (re)pull. Use a large value (e.g. 3000) for a one-time full backfill."
+        required: false
+        default: "14"
+      load_static_datasets:
+        description: "Also (re)load Spillover Simulator + Climate Scenarios tables (~7M rows, static IMF snapshots). Don't combine with a large backfill in the same run -- it risks the 6h job timeout."
+        required: false
+        default: "false"
+        type: boolean
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
 
@@ -24,5 +35,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SYNC_SINCE_DAYS: "14"
+          SYNC_SINCE_DAYS: ${{ github.event.inputs.sync_since_days || '14' }}
+          LOAD_STATIC_DATASETS: ${{ github.event.inputs.load_static_datasets || 'false' }}
         run: python scripts/sync_portwatch.py

@@ -2,42 +2,49 @@
 Pull IMF PortWatch data from the public ArcGIS FeatureServers and upsert into
 Supabase (project: Liner Services / jeuqpnhajmatekbzlfne, tables prefixed imf_).
 
-No local storage of the source data — this streams ArcGIS query pages
-directly into Postgres via the Supabase REST API (PostgREST upsert).
+No local storage of the source data -- this streams ArcGIS query pages
+directly into Postgres via the Supabase REST API, one page at a time
+(never accumulates a whole dataset in memory -- some of these tables are
+multiple millions of rows).
 
 Env vars required:
   SUPABASE_URL              e.g. https://jeuqpnhajmatekbzlfne.supabase.co
   SUPABASE_SERVICE_ROLE_KEY service role key (server-side only, never expose client-side)
 
 Optional:
-  SYNC_SINCE_DAYS  how many days of fact-table history to (re)pull each run
-                    (default 14 -- covers the weekly refresh plus a safety margin
-                    for late-arriving/revised days). Reference tables (ports,
-                    chokepoints) are always pulled in full since they're small.
+  SYNC_SINCE_DAYS      how many days of daily-activity history to (re)pull each run
+                        (default 14 -- covers the weekly refresh plus a safety
+                        margin for late-arriving/revised days). Pass a large
+                        value (e.g. 3000) for a one-time full historical backfill.
+  LOAD_STATIC_DATASETS  "true" to also (re)load the Spillover Simulator and
+                        Climate Scenarios tables. These are IMF-published static
+                        snapshots (not updated weekly), ~7M rows combined, so
+                        they're opt-in rather than part of the default weekly run.
 """
 import os
 import sys
-import time
 import datetime
 import requests
 
 ARCGIS_BASE = "https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services"
-PAGE_SIZE = 1000  # matches the FeatureServer's maxRecordCount
+PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1000)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SYNC_SINCE_DAYS = int(os.environ.get("SYNC_SINCE_DAYS", "14"))
+LOAD_STATIC_DATASETS = os.environ.get("LOAD_STATIC_DATASETS", "false").lower() == "true"
 
+SESSION = requests.Session()
 SB_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
-    "Prefer": "resolution=merge-duplicates",
 }
 
 
-def arcgis_query_all(layer_url, where="1=1", out_fields="*"):
-    """Page through an ArcGIS FeatureServer layer, yielding attribute dicts."""
+def arcgis_pages(layer_url, where="1=1", out_fields="*"):
+    """Page through an ArcGIS FeatureServer layer, yielding one page (list of
+    attribute dicts) at a time."""
     offset = 0
     while True:
         params = {
@@ -48,24 +55,23 @@ def arcgis_query_all(layer_url, where="1=1", out_fields="*"):
             "resultRecordCount": PAGE_SIZE,
             "orderByFields": "ObjectId",
         }
-        resp = requests.get(f"{layer_url}/query", params=params, timeout=60)
+        resp = SESSION.get(f"{layer_url}/query", params=params, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
             raise RuntimeError(f"ArcGIS error: {data['error']}")
         features = data.get("features", [])
         if not features:
-            break
-        for f in features:
-            yield f["attributes"]
+            return
+        yield [f["attributes"] for f in features]
         if len(features) < PAGE_SIZE:
-            break
+            return
         offset += PAGE_SIZE
 
 
 def to_date_str(value):
-    """Daily_Ports_Data / Daily_Chokepoints_Data expose `date` as esriFieldTypeDateOnly,
-    which ArcGIS serializes as a "YYYY-MM-DD" string, not epoch millis."""
+    """esriFieldTypeDateOnly is serialized as a "YYYY-MM-DD" string by ArcGIS;
+    esriFieldTypeDate (regular date/timestamp) is serialized as epoch millis."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -73,23 +79,40 @@ def to_date_str(value):
     return datetime.datetime.utcfromtimestamp(value / 1000).strftime("%Y-%m-%d")
 
 
-def supabase_upsert(table, rows, batch_size=500):
+def to_timestamp_str(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return datetime.datetime.utcfromtimestamp(value / 1000).isoformat()
+
+
+def supabase_upsert_batch(table, rows, on_conflict=None):
+    """POST one batch. Table upserts (has a natural key) pass on_conflict;
+    wholesale-reload tables (no natural key) omit it and just insert."""
     if not rows:
-        return 0
-    total = 0
+        return
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i : i + batch_size]
-        resp = requests.post(url, headers=SB_HEADERS, json=batch, timeout=60)
-        if resp.status_code >= 300:
-            raise RuntimeError(f"Supabase upsert failed for {table}: {resp.status_code} {resp.text[:500]}")
-        total += len(batch)
-        time.sleep(0.1)  # be polite to PostgREST
-    return total
+    headers = dict(SB_HEADERS)
+    if on_conflict:
+        url += f"?on_conflict={on_conflict}"
+        headers["Prefer"] = "resolution=merge-duplicates"
+    resp = SESSION.post(url, headers=headers, json=rows, timeout=120)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"Supabase write failed for {table}: {resp.status_code} {resp.text[:500]}")
 
 
-def log_run(dataset, row_count, min_date, max_date, status="ok", notes=None):
-    supabase_upsert(
+def supabase_delete_all(table):
+    """Delete-all for wholesale-reload tables. Uses the surrogate `id` column
+    every such table has, since PostgREST requires a filter on delete."""
+    url = f"{SUPABASE_URL}/rest/v1/{table}?id=gte.0"
+    resp = SESSION.delete(url, headers=SB_HEADERS, timeout=120)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"Supabase delete-all failed for {table}: {resp.status_code} {resp.text[:500]}")
+
+
+def log_run(dataset, row_count, min_date=None, max_date=None, status="ok", notes=None):
+    supabase_upsert_batch(
         "imf_refresh_log",
         [{
             "dataset": dataset,
@@ -102,11 +125,35 @@ def log_run(dataset, row_count, min_date, max_date, status="ok", notes=None):
     )
 
 
+def sync_stream(label, layer_url, transform, table, on_conflict=None, where="1=1", wholesale=False):
+    """Generic paged sync: fetch page -> transform -> upsert page, immediately,
+    without ever holding the full result set in memory."""
+    if wholesale:
+        supabase_delete_all(table)
+    total = 0
+    dates = []
+    for page in arcgis_pages(layer_url, where=where):
+        rows = [transform(a) for a in page]
+        supabase_upsert_batch(table, rows, on_conflict=on_conflict)
+        total += len(rows)
+        for r in rows:
+            d = r.get("date") or r.get("fromdate")
+            if d:
+                dates.append(d)
+        print(f"  {label}: {total} rows so far...", flush=True)
+    min_d, max_d = (min(dates), max(dates)) if dates else (None, None)
+    print(f"{label}: wrote {total} rows" + (f" ({min_d}..{max_d})" if dates else ""))
+    log_run(label, total, min_d, max_d)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Reference tables (small, always fetched in full)
+# ---------------------------------------------------------------------------
+
 def sync_ports():
-    layer = f"{ARCGIS_BASE}/PortWatch_ports_database/FeatureServer/0"
-    rows = []
-    for a in arcgis_query_all(layer):
-        rows.append({
+    def transform(a):
+        return {
             "portid": a.get("portid"),
             "portname": a.get("portname"),
             "fullname": a.get("fullname"),
@@ -128,17 +175,14 @@ def sync_ports():
             "industry_top3": a.get("industry_top3"),
             "share_country_maritime_import": a.get("share_country_maritime_import"),
             "share_country_maritime_export": a.get("share_country_maritime_export"),
-        })
-    n = supabase_upsert("imf_ports?on_conflict=portid", rows)
-    print(f"imf_ports: upserted {n} rows")
-    log_run("imf_ports", n, None, None)
+        }
+    sync_stream("imf_ports", f"{ARCGIS_BASE}/PortWatch_ports_database/FeatureServer/0",
+                transform, "imf_ports", on_conflict="portid")
 
 
 def sync_chokepoints():
-    layer = f"{ARCGIS_BASE}/PortWatch_chokepoints_database/FeatureServer/0"
-    rows = []
-    for a in arcgis_query_all(layer):
-        rows.append({
+    def transform(a):
+        return {
             "portid": a.get("portid"),
             "portname": a.get("portname"),
             "fullname": a.get("fullname"),
@@ -156,19 +200,19 @@ def sync_chokepoints():
             "industry_top1": a.get("industry_top1"),
             "industry_top2": a.get("industry_top2"),
             "industry_top3": a.get("industry_top3"),
-        })
-    n = supabase_upsert("imf_chokepoints?on_conflict=portid", rows)
-    print(f"imf_chokepoints: upserted {n} rows")
-    log_run("imf_chokepoints", n, None, None)
+        }
+    sync_stream("imf_chokepoints", f"{ARCGIS_BASE}/PortWatch_chokepoints_database/FeatureServer/0",
+                transform, "imf_chokepoints", on_conflict="portid")
 
+
+# ---------------------------------------------------------------------------
+# Daily fact tables (rolling window by default; SYNC_SINCE_DAYS controls depth)
+# ---------------------------------------------------------------------------
 
 def sync_port_activity():
-    layer = f"{ARCGIS_BASE}/Daily_Ports_Data/FeatureServer/0"
     since = (datetime.date.today() - datetime.timedelta(days=SYNC_SINCE_DAYS)).isoformat()
-    where = f"date >= DATE '{since}'"
-    rows = []
-    for a in arcgis_query_all(layer, where=where):
-        rows.append({
+    def transform(a):
+        return {
             "portid": a.get("portid"),
             "date": to_date_str(a.get("date")),
             "portcalls": a.get("portcalls"),
@@ -192,20 +236,16 @@ def sync_port_activity():
             "export_roro": a.get("export_roro"),
             "export_tanker": a.get("export_tanker"),
             "export_cargo": a.get("export_cargo"),
-        })
-    n = supabase_upsert("imf_port_activity?on_conflict=portid,date", rows)
-    dates = [r["date"] for r in rows if r["date"]]
-    print(f"imf_port_activity: upserted {n} rows ({min(dates, default='-')}..{max(dates, default='-')})")
-    log_run("imf_port_activity", n, min(dates, default=None), max(dates, default=None))
+        }
+    sync_stream("imf_port_activity", f"{ARCGIS_BASE}/Daily_Ports_Data/FeatureServer/0",
+                transform, "imf_port_activity", on_conflict="portid,date",
+                where=f"date >= DATE '{since}'")
 
 
 def sync_chokepoint_activity():
-    layer = f"{ARCGIS_BASE}/Daily_Chokepoints_Data/FeatureServer/0"
     since = (datetime.date.today() - datetime.timedelta(days=SYNC_SINCE_DAYS)).isoformat()
-    where = f"date >= DATE '{since}'"
-    rows = []
-    for a in arcgis_query_all(layer, where=where):
-        rows.append({
+    def transform(a):
+        return {
             "portid": a.get("portid"),
             "date": to_date_str(a.get("date")),
             "n_total": a.get("n_total"),
@@ -222,16 +262,130 @@ def sync_chokepoint_activity():
             "capacity_roro": a.get("capacity_roro"),
             "capacity_tanker": a.get("capacity_tanker"),
             "capacity_cargo": a.get("capacity_cargo"),
-        })
-    n = supabase_upsert("imf_chokepoint_activity?on_conflict=portid,date", rows)
-    dates = [r["date"] for r in rows if r["date"]]
-    print(f"imf_chokepoint_activity: upserted {n} rows ({min(dates, default='-')}..{max(dates, default='-')})")
-    log_run("imf_chokepoint_activity", n, min(dates, default=None), max(dates, default=None))
+        }
+    sync_stream("imf_chokepoint_activity", f"{ARCGIS_BASE}/Daily_Chokepoints_Data/FeatureServer/0",
+                transform, "imf_chokepoint_activity", on_conflict="portid,date",
+                where=f"date >= DATE '{since}'")
+
+
+# ---------------------------------------------------------------------------
+# Disruptions (small, ~130 rows, ongoing events -- upserted every run)
+# ---------------------------------------------------------------------------
+
+def sync_disruptions():
+    def transform(a):
+        return {
+            "eventid": a.get("eventid"),
+            "eventtype": a.get("eventtype"),
+            "eventname": a.get("eventname"),
+            "htmlname": a.get("htmlname"),
+            "htmldescription": a.get("htmldescription"),
+            "alertlevel": a.get("alertlevel"),
+            "country": a.get("country"),
+            "fromdate": to_date_str(a.get("fromdate")),
+            "todate": to_date_str(a.get("todate")),
+            "year": a.get("year"),
+            "severitytext": a.get("severitytext"),
+            "lat": a.get("lat"),
+            "long": a.get("long"),
+            "editdate": to_timestamp_str(a.get("editdate")),
+            "affectedports": a.get("affectedports"),
+            "n_affectedports": a.get("n_affectedports"),
+            "affectedpopulation": a.get("affectedpopulation"),
+            "pageid": a.get("pageid"),
+        }
+    sync_stream("imf_disruptions", f"{ARCGIS_BASE}/portwatch_disruptions_database/FeatureServer/0",
+                transform, "imf_disruptions", on_conflict="eventid")
+
+
+# ---------------------------------------------------------------------------
+# Spillover Simulator + Climate Scenarios: static IMF snapshots (LOAD_STATIC_DATASETS=true only)
+# ---------------------------------------------------------------------------
+
+def sync_spillover_port_impact():
+    def transform(a):
+        return {
+            "from_portid": a.get("from_portid"), "from_portname": a.get("from_portname"),
+            "from_country": a.get("from_country"), "from_iso3": a.get("from_iso3"),
+            "from_lat": a.get("from_lat"), "from_lon": a.get("from_lon"),
+            "to_portid": a.get("to_portid"), "to_portname": a.get("to_portname"),
+            "to_country": a.get("to_country"), "to_iso3": a.get("to_iso3"),
+            "to_lat": a.get("to_lat"), "to_lon": a.get("to_lon"),
+            "average_transit_days": a.get("average_transit_days"),
+            "daily_capacity_at_risk": a.get("daily_capacity_at_risk"),
+            "relative_capacity_at_risk": a.get("relative_capacity_at_risk"),
+        }
+    sync_stream("imf_spillover_port_impact", f"{ARCGIS_BASE}/spillovers_port_level_impact/FeatureServer/0",
+                transform, "imf_spillover_port_impact", wholesale=True)
+
+
+def sync_spillover_country_trade_impact():
+    def transform(a):
+        return {
+            "from_portid": a.get("from_portid"), "from_portname": a.get("from_portname"),
+            "from_country": a.get("from_country"), "from_iso3": a.get("from_iso3"),
+            "from_lat": a.get("from_lat"), "from_lon": a.get("from_lon"),
+            "to_country": a.get("to_country"), "to_iso3": a.get("to_iso3"),
+            "to_lat": a.get("to_lat"), "to_lon": a.get("to_lon"),
+            "industry": a.get("industry"), "hs_section": a.get("hs_section"),
+            "unit": a.get("unit"), "scale": a.get("scale"),
+            "daily_export_value_at_risk": a.get("daily_export_value_at_risk"),
+            "daily_import_value_at_risk": a.get("daily_import_value_at_risk"),
+        }
+    sync_stream("imf_spillover_country_trade_impact", f"{ARCGIS_BASE}/spillovers_trade/FeatureServer/0",
+                transform, "imf_spillover_country_trade_impact", wholesale=True)
+
+
+def sync_spillover_supplychain_impact():
+    def transform(a):
+        return {
+            "from_portid": a.get("from_portid"), "from_portname": a.get("from_portname"),
+            "from_country": a.get("from_country"), "from_iso3": a.get("from_iso3"),
+            "from_lat": a.get("from_lat"), "from_lon": a.get("from_lon"),
+            "to_country": a.get("to_country"), "to_iso3": a.get("to_iso3"),
+            "to_lat": a.get("to_lat"), "to_lon": a.get("to_lon"),
+            "industry": a.get("industry"), "hs_section": a.get("hs_section"),
+            "unit": a.get("unit"), "scale": a.get("scale"),
+            "daily_consumption_at_risk": a.get("daily_consumption_at_risk"),
+            "daily_industryoutput_at_risk": a.get("daily_industryoutput_at_risk"),
+        }
+    sync_stream("imf_spillover_supplychain_impact", f"{ARCGIS_BASE}/spillovers_supplychain/FeatureServer/0",
+                transform, "imf_spillover_supplychain_impact", wholesale=True)
+
+
+def sync_climate_port_risk():
+    def transform(a):
+        return {
+            "portid": a.get("portid"), "portname": a.get("portname"),
+            "country": a.get("country"), "iso3": a.get("ISO3"),
+            "lat": a.get("lat"), "lon": a.get("lon"),
+            "scenario": a.get("scenario"), "unit": a.get("unit"),
+            "measure": a.get("measure"), "value": a.get("value"),
+            "hazard": a.get("hazard"),
+        }
+    sync_stream("imf_climate_port_risk", f"{ARCGIS_BASE}/climate_scenarios_climate_risk/FeatureServer/0",
+                transform, "imf_climate_port_risk", wholesale=True)
+
+
+def sync_climate_trade_risk():
+    def transform(a):
+        return {
+            "from_country": a.get("from_country"), "from_iso3": a.get("from_ISO3"),
+            "to_portid": a.get("to_portid"), "to_portname": a.get("to_portname"),
+            "to_country": a.get("to_country"), "to_iso3": a.get("to_ISO3"),
+            "to_lat": a.get("to_lat"), "to_lon": a.get("to_lon"),
+            "scenario": a.get("scenario"), "flow": a.get("flow"),
+            "industry": a.get("industry"), "hs_section": a.get("hs_section"),
+            "rank": a.get("rank"), "days_downtime_at_port": a.get("days_downtime_at_port"),
+            "trade_value_at_risk": a.get("trade_value_at_risk"), "unit": a.get("unit"),
+        }
+    sync_stream("imf_climate_trade_risk", f"{ARCGIS_BASE}/scenarios_trade/FeatureServer/0",
+                transform, "imf_climate_trade_risk", wholesale=True)
 
 
 def refresh_matviews():
     for mv in ("imf_mv_global_daily", "imf_mv_port_weekly", "imf_mv_chokepoint_daily"):
-        resp = requests.post(
+        resp = SESSION.post(
             f"{SUPABASE_URL}/rest/v1/rpc/imf_refresh_matview",
             headers=SB_HEADERS,
             json={"mv_name": mv},
@@ -244,9 +398,18 @@ def refresh_matviews():
 
 
 if __name__ == "__main__":
-    # Reference tables first (fact tables FK into them)
+    # Reference tables first (fact tables logically depend on them)
     sync_ports()
     sync_chokepoints()
     sync_port_activity()
     sync_chokepoint_activity()
+    sync_disruptions()
+
+    if LOAD_STATIC_DATASETS:
+        sync_spillover_port_impact()
+        sync_spillover_country_trade_impact()
+        sync_spillover_supplychain_impact()
+        sync_climate_port_risk()
+        sync_climate_trade_risk()
+
     refresh_matviews()
