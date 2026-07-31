@@ -79,7 +79,8 @@ for data that isn't changing.
 3. **Backfill runs** — trigger manually from Actions → "Sync IMF PortWatch
    data" → Run workflow, which now takes two inputs:
    - `sync_since_days` — days of port/chokepoint daily-activity history to
-     pull. Default `14` (the normal weekly cadence). For a full historical
+     pull. Default `30` (the normal weekly cadence, with margin for late
+     revisions). For a full historical
      backfill (data goes back to ~2019), set a large value, e.g. `3000`.
    - `load_static_datasets` — set to `true` to (re)load the 5 Spillover/
      Climate tables (~6.95M rows combined).
@@ -89,8 +90,8 @@ for data that isn't changing.
    itself; adding `load_static_datasets=true` on top risks the 340-minute
    job timeout. Recommended order:
    1. First run: `sync_since_days=3000`, `load_static_datasets=false` — backfills port/chokepoint history.
-   2. Second run: `sync_since_days=14` (default), `load_static_datasets=true` — loads the static datasets once.
-   3. After that, the scheduled weekly runs use the defaults (`14`, `false`) and stay fast/cheap.
+   2. Second run: `sync_since_days=30` (default), `load_static_datasets=true` — loads the static datasets once.
+   3. After that, the scheduled weekly runs use the defaults (`30`, `false`) and stay fast/cheap.
 
    If ArcGIS rate-limits a very large single run, narrow the backfill by
    running `sync_since_days` at smaller values covering different windows

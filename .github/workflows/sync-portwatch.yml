@@ -11,7 +11,7 @@ on:
       sync_since_days:
         description: "Days of port/chokepoint daily-activity history to (re)pull. Use a large value (e.g. 3000) for a one-time full backfill."
         required: false
-        default: "14"
+        default: "30"
       load_static_datasets:
         description: "Also (re)load Spillover Simulator + Climate Scenarios tables (~7M rows, static IMF snapshots). Don't combine with a large backfill in the same run -- it risks the 6h job timeout."
         required: false
@@ -35,6 +35,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SYNC_SINCE_DAYS: ${{ github.event.inputs.sync_since_days || '14' }}
+          SYNC_SINCE_DAYS: ${{ github.event.inputs.sync_since_days || '30' }}
           LOAD_STATIC_DATASETS: ${{ github.event.inputs.load_static_datasets || 'false' }}
         run: python scripts/sync_portwatch.py

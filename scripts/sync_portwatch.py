@@ -13,9 +13,11 @@ Env vars required:
 
 Optional:
   SYNC_SINCE_DAYS      how many days of daily-activity history to (re)pull each run
-                        (default 14 -- covers the weekly refresh plus a safety
-                        margin for late-arriving/revised days). Pass a large
-                        value (e.g. 3000) for a one-time full historical backfill.
+                        (default 30 -- the weekly refresh only needs ~7-14 days,
+                        but a wider rolling window cheaply absorbs late-arriving/
+                        revised days without needing a special-case backfill).
+                        Pass a large value (e.g. 3000) for a one-time full
+                        historical backfill.
   LOAD_STATIC_DATASETS  "true" to also (re)load the Spillover Simulator and
                         Climate Scenarios tables. These are IMF-published static
                         snapshots (not updated weekly), ~7M rows combined, so
@@ -31,7 +33,7 @@ PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-SYNC_SINCE_DAYS = int(os.environ.get("SYNC_SINCE_DAYS", "14"))
+SYNC_SINCE_DAYS = int(os.environ.get("SYNC_SINCE_DAYS", "30"))
 LOAD_STATIC_DATASETS = os.environ.get("LOAD_STATIC_DATASETS", "false").lower() == "true"
 
 SESSION = requests.Session()
