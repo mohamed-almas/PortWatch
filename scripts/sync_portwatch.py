@@ -63,10 +63,14 @@ def arcgis_query_all(layer_url, where="1=1", out_fields="*"):
         offset += PAGE_SIZE
 
 
-def epoch_ms_to_date(ms):
-    if ms is None:
+def to_date_str(value):
+    """Daily_Ports_Data / Daily_Chokepoints_Data expose `date` as esriFieldTypeDateOnly,
+    which ArcGIS serializes as a "YYYY-MM-DD" string, not epoch millis."""
+    if value is None:
         return None
-    return datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d")
+    if isinstance(value, str):
+        return value[:10]
+    return datetime.datetime.utcfromtimestamp(value / 1000).strftime("%Y-%m-%d")
 
 
 def supabase_upsert(table, rows, batch_size=500):
@@ -166,7 +170,7 @@ def sync_port_activity():
     for a in arcgis_query_all(layer, where=where):
         rows.append({
             "portid": a.get("portid"),
-            "date": epoch_ms_to_date(a.get("date")),
+            "date": to_date_str(a.get("date")),
             "portcalls": a.get("portcalls"),
             "portcalls_container": a.get("portcalls_container"),
             "portcalls_dry_bulk": a.get("portcalls_dry_bulk"),
@@ -203,7 +207,7 @@ def sync_chokepoint_activity():
     for a in arcgis_query_all(layer, where=where):
         rows.append({
             "portid": a.get("portid"),
-            "date": epoch_ms_to_date(a.get("date")),
+            "date": to_date_str(a.get("date")),
             "n_total": a.get("n_total"),
             "n_container": a.get("n_container"),
             "n_dry_bulk": a.get("n_dry_bulk"),
