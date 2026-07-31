@@ -1,0 +1,28 @@
+name: Sync IMF PortWatch data
+
+on:
+  schedule:
+    # IMF PortWatch refreshes source data Tuesdays 9AM ET (13:00 UTC in EDT / 14:00 UTC in EST).
+    # Run a few hours after to be safe, and re-check midweek in case of late corrections.
+    - cron: "0 18 * * 2"  # Tuesday 18:00 UTC
+    - cron: "0 6 * * 5"   # Friday 06:00 UTC (safety net for revisions)
+  workflow_dispatch: {}    # manual "Run workflow" button
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Sync ArcGIS FeatureServer -> Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SYNC_SINCE_DAYS: "14"
+        run: python scripts/sync_portwatch.py

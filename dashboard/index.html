@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IMF PortWatch — Executive Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #131c2e; --text: #e8edf5; --muted: #8a97ab;
+    --accent: #4da3ff; --up: #38c172; --down: #ef4444; --border: #223047;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f7fb; --panel: #ffffff; --text: #101828; --muted: #667085; --border: #e4e7ec; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .kpi-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-value { font-size: 26px; font-weight: 650; margin-top: 6px; }
+  .kpi-delta { font-size: 12px; margin-top: 4px; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .grid1 { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 16px; }
+  .panel-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  canvas { max-height: 320px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .status { font-size: 12px; color: var(--muted); }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>IMF PortWatch — Executive Dashboard</h1>
+    <div class="sub">Global port activity, chokepoint transits &amp; trade nowcast</div>
+  </div>
+  <div class="status" id="status">Loading…</div>
+</header>
+
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="card">
+      <p class="panel-title">Global daily trade volume estimate (import + export, metric tons)</p>
+      <canvas id="globalTradeChart"></canvas>
+    </div>
+    <div class="card">
+      <p class="panel-title">Top 10 busiest ports (last 30 days, port calls)</p>
+      <canvas id="topPortsChart"></canvas>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <p class="panel-title">Chokepoint transits (last 30 days)</p>
+      <canvas id="chokepointChart"></canvas>
+    </div>
+    <div class="card">
+      <p class="panel-title">Chokepoint utilization (transits vs. estimated capacity, latest day)</p>
+      <table id="chokepointTable">
+        <thead><tr><th>Chokepoint</th><th>Transits</th><th>Capacity</th><th>Util.</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid1">
+    <div class="card">
+      <p class="panel-title">Data freshness</p>
+      <table id="refreshTable">
+        <thead><tr><th>Dataset</th><th>Last run</th><th>Rows</th><th>Coverage</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+// Read-only anon key, scoped by RLS to SELECT only on imf_* tables.
+const SUPABASE_URL = "https://jeuqpnhajmatekbzlfne.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_S5hBqEO4xEqmTuW0N_H4Sg_Is6pPfgh";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const fmt = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const pct = (n) => n == null ? "—" : `${(n * 100).toFixed(1)}%`;
+
+async function loadKpis(globalDaily) {
+  const el = document.getElementById("kpis");
+  if (!globalDaily.length) { el.innerHTML = `<div class="card">No data yet — waiting on first sync run.</div>`; return; }
+  const latest = globalDaily[globalDaily.length - 1];
+  const weekAgo = globalDaily[Math.max(0, globalDaily.length - 8)];
+  const deltaCalls = weekAgo.portcalls ? ((latest.portcalls - weekAgo.portcalls) / weekAgo.portcalls) : null;
+  const deltaTrade = weekAgo.total_trade ? ((latest.total_trade - weekAgo.total_trade) / weekAgo.total_trade) : null;
+
+  const cards = [
+    { label: "Latest data date", value: latest.date },
+    { label: "Global port calls (day)", value: fmt(latest.portcalls), delta: deltaCalls },
+    { label: "Global trade volume (day, mt)", value: fmt(latest.total_trade), delta: deltaTrade },
+    { label: "Import / Export (day, mt)", value: `${fmt(latest.import)} / ${fmt(latest.export)}` },
+  ];
+  el.innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value}</div>
+      ${c.delta != null ? `<div class="kpi-delta ${c.delta >= 0 ? 'up' : 'down'}">${c.delta >= 0 ? '▲' : '▼'} ${pct(Math.abs(c.delta))} vs 7d ago</div>` : ""}
+    </div>
+  `).join("");
+}
+
+function lineChart(ctx, labels, datasets) {
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: datasets.length > 1 } },
+      scales: { y: { beginAtZero: false } },
+    },
+  });
+}
+
+async function main() {
+  const status = document.getElementById("status");
+  try {
+    const [{ data: globalDaily, error: e1 }, { data: refreshLog, error: e2 }] = await Promise.all([
+      sb.from("imf_mv_global_daily").select("*").order("date", { ascending: true }).limit(180),
+      sb.from("imf_refresh_log").select("*").order("run_at", { ascending: false }).limit(10),
+    ]);
+    if (e1) throw e1;
+
+    await loadKpis(globalDaily || []);
+
+    if (globalDaily && globalDaily.length) {
+      lineChart(
+        document.getElementById("globalTradeChart"),
+        globalDaily.map(d => d.date),
+        [{ label: "Total trade (mt)", data: globalDaily.map(d => d.total_trade), borderColor: "#4da3ff", tension: .25, pointRadius: 0 }]
+      );
+    }
+
+    // Top ports last 30 days
+    const since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    const { data: recentActivity, error: e3 } = await sb
+      .from("imf_port_activity")
+      .select("portid, portcalls")
+      .gte("date", since30);
+    if (e3) throw e3;
+    const byPort = {};
+    (recentActivity || []).forEach(r => { byPort[r.portid] = (byPort[r.portid] || 0) + (r.portcalls || 0); });
+    const topPortIds = Object.entries(byPort).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (topPortIds.length) {
+      const { data: portNames } = await sb.from("imf_ports").select("portid, portname").in("portid", topPortIds.map(p => p[0]));
+      const nameMap = Object.fromEntries((portNames || []).map(p => [p.portid, p.portname]));
+      new Chart(document.getElementById("topPortsChart"), {
+        type: "bar",
+        data: {
+          labels: topPortIds.map(([id]) => nameMap[id] || id),
+          datasets: [{ label: "Port calls (30d)", data: topPortIds.map(([, v]) => v), backgroundColor: "#4da3ff" }],
+        },
+        options: { indexAxis: "y", plugins: { legend: { display: false } } },
+      });
+    }
+
+    // Chokepoints
+    const { data: chokeDaily, error: e4 } = await sb
+      .from("imf_mv_chokepoint_daily")
+      .select("*")
+      .gte("date", since30)
+      .order("date", { ascending: true });
+    if (e4) throw e4;
+    if (chokeDaily && chokeDaily.length) {
+      const dates = [...new Set(chokeDaily.map(d => d.date))].sort();
+      const byChoke = {};
+      chokeDaily.forEach(d => { (byChoke[d.portname] ||= {})[d.date] = d.n_total; });
+      const topChokeNames = Object.entries(byChoke)
+        .map(([name, series]) => [name, Object.values(series).reduce((a, b) => a + (b || 0), 0)])
+        .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name]) => name);
+      const palette = ["#4da3ff", "#38c172", "#f2994a", "#eb5757", "#9b51e0", "#2d9cdb"];
+      lineChart(
+        document.getElementById("chokepointChart"),
+        dates,
+        topChokeNames.map((name, i) => ({
+          label: name,
+          data: dates.map(d => byChoke[name][d] ?? null),
+          borderColor: palette[i % palette.length],
+          tension: .25, pointRadius: 0,
+        }))
+      );
+
+      // Latest-day utilization table
+      const latestDate = dates[dates.length - 1];
+      const latestRows = chokeDaily.filter(d => d.date === latestDate)
+        .sort((a, b) => (b.n_total || 0) - (a.n_total || 0));
+      document.querySelector("#chokepointTable tbody").innerHTML = latestRows.map(r => `
+        <tr>
+          <td>${r.portname}</td>
+          <td>${fmt(r.n_total)}</td>
+          <td>${fmt(r.capacity)}</td>
+          <td>${r.capacity ? pct(r.n_total / r.capacity) : "—"}</td>
+        </tr>
+      `).join("");
+    }
+
+    // Freshness table
+    document.querySelector("#refreshTable tbody").innerHTML = (refreshLog || []).map(r => `
+      <tr>
+        <td>${r.dataset}</td>
+        <td>${new Date(r.run_at).toLocaleString()}</td>
+        <td>${fmt(r.row_count)}</td>
+        <td>${r.min_date || "—"} → ${r.max_date || "—"}</td>
+        <td>${r.status || "—"}</td>
+      </tr>
+    `).join("");
+
+    status.textContent = `Loaded ${new Date().toLocaleString()}`;
+  } catch (err) {
+    console.error(err);
+    status.textContent = "Failed to load — see console.";
+  }
+}
+
+main();
+</script>
+</body>
+</html>
