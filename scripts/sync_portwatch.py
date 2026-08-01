@@ -89,11 +89,22 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
             "resultRecordCount": PAGE_SIZE,
             "orderByFields": "ObjectId",
         }
-        resp = request_with_retry("GET", f"{layer_url}/query", params=params, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        if "error" in data:
-            raise RuntimeError(f"ArcGIS error: {data['error']}")
+        data = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            resp = request_with_retry("GET", f"{layer_url}/query", params=params, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            if "error" not in data:
+                break
+            # ArcGIS sometimes returns an in-body error (HTTP 200, JSON has "error")
+            # on transient server-side hiccups -- confirmed the identical request
+            # succeeds moments later, so this is retryable, not a real bad request.
+            if attempt == MAX_RETRIES:
+                raise RuntimeError(f"ArcGIS error at offset {offset} after {MAX_RETRIES} attempts: {data['error']}")
+            wait = RETRY_BACKOFF_BASE ** attempt
+            print(f"  ArcGIS returned error at offset {offset} ({data['error']}), retrying in {wait}s "
+                  f"(attempt {attempt}/{MAX_RETRIES})...", flush=True)
+            time.sleep(wait)
         features = data.get("features", [])
         if not features:
             return
