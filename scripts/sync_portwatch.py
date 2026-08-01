@@ -22,19 +22,30 @@ Optional:
                         Climate Scenarios tables. These are IMF-published static
                         snapshots (not updated weekly), ~7M rows combined, so
                         they're opt-in rather than part of the default weekly run.
+  SYNC_TARGET           Run only one named sync instead of the full set. Use this
+                        for static datasets so each fits comfortably inside a
+                        single job -- e.g. SYNC_TARGET=spillover_supplychain.
+                        One of: ports, chokepoints, port_activity,
+                        chokepoint_activity, disruptions, spillover_port,
+                        spillover_country_trade, spillover_supplychain,
+                        climate_port_risk, climate_trade_risk.
 """
 import os
 import sys
+import time
 import datetime
 import requests
 
 ARCGIS_BASE = "https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services"
 PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1000)
+MAX_RETRIES = 6
+RETRY_BACKOFF_BASE = 2  # seconds: 2, 4, 8, 16, 32, 64
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SYNC_SINCE_DAYS = int(os.environ.get("SYNC_SINCE_DAYS", "30"))
 LOAD_STATIC_DATASETS = os.environ.get("LOAD_STATIC_DATASETS", "false").lower() == "true"
+SYNC_TARGET = os.environ.get("SYNC_TARGET", "").strip()
 
 SESSION = requests.Session()
 SB_HEADERS = {
@@ -42,6 +53,27 @@ SB_HEADERS = {
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
 }
+
+
+def request_with_retry(method, url, **kwargs):
+    """requests call with exponential-backoff retry on transient failures
+    (connection errors, timeouts, 5xx). ArcGIS's public endpoint intermittently
+    502s under load -- a single blip shouldn't kill a multi-hour backfill."""
+    last_exc = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = SESSION.request(method, url, **kwargs)
+            if resp.status_code >= 500:
+                raise requests.exceptions.HTTPError(f"{resp.status_code} server error", response=resp)
+            return resp
+        except (requests.exceptions.RequestException,) as exc:
+            last_exc = exc
+            if attempt == MAX_RETRIES:
+                break
+            wait = RETRY_BACKOFF_BASE ** attempt
+            print(f"  request failed ({exc}), retrying in {wait}s (attempt {attempt}/{MAX_RETRIES})...", flush=True)
+            time.sleep(wait)
+    raise last_exc
 
 
 def arcgis_pages(layer_url, where="1=1", out_fields="*"):
@@ -57,7 +89,7 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
             "resultRecordCount": PAGE_SIZE,
             "orderByFields": "ObjectId",
         }
-        resp = SESSION.get(f"{layer_url}/query", params=params, timeout=60)
+        resp = request_with_retry("GET", f"{layer_url}/query", params=params, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
@@ -99,7 +131,7 @@ def supabase_upsert_batch(table, rows, on_conflict=None):
     if on_conflict:
         url += f"?on_conflict={on_conflict}"
         headers["Prefer"] = "resolution=merge-duplicates"
-    resp = SESSION.post(url, headers=headers, json=rows, timeout=120)
+    resp = request_with_retry("POST", url, headers=headers, json=rows, timeout=120)
     if resp.status_code >= 300:
         raise RuntimeError(f"Supabase write failed for {table}: {resp.status_code} {resp.text[:500]}")
 
@@ -108,7 +140,7 @@ def supabase_delete_all(table):
     """Delete-all for wholesale-reload tables. Uses the surrogate `id` column
     every such table has, since PostgREST requires a filter on delete."""
     url = f"{SUPABASE_URL}/rest/v1/{table}?id=gte.0"
-    resp = SESSION.delete(url, headers=SB_HEADERS, timeout=120)
+    resp = request_with_retry("DELETE", url, headers=SB_HEADERS, timeout=120)
     if resp.status_code >= 300:
         raise RuntimeError(f"Supabase delete-all failed for {table}: {resp.status_code} {resp.text[:500]}")
 
@@ -385,6 +417,20 @@ def sync_climate_trade_risk():
                 transform, "imf_climate_trade_risk", wholesale=True)
 
 
+DATASET_SYNCS = {
+    "ports": sync_ports,
+    "chokepoints": sync_chokepoints,
+    "port_activity": sync_port_activity,
+    "chokepoint_activity": sync_chokepoint_activity,
+    "disruptions": sync_disruptions,
+    "spillover_port": sync_spillover_port_impact,
+    "spillover_country_trade": sync_spillover_country_trade_impact,
+    "spillover_supplychain": sync_spillover_supplychain_impact,
+    "climate_port_risk": sync_climate_port_risk,
+    "climate_trade_risk": sync_climate_trade_risk,
+}
+
+
 def refresh_matviews():
     for mv in ("imf_mv_global_daily", "imf_mv_port_weekly", "imf_mv_chokepoint_daily"):
         resp = SESSION.post(
@@ -400,18 +446,33 @@ def refresh_matviews():
 
 
 if __name__ == "__main__":
-    # Reference tables first (fact tables logically depend on them)
-    sync_ports()
-    sync_chokepoints()
-    sync_port_activity()
-    sync_chokepoint_activity()
-    sync_disruptions()
+    if SYNC_TARGET:
+        if SYNC_TARGET not in DATASET_SYNCS:
+            raise SystemExit(f"Unknown SYNC_TARGET '{SYNC_TARGET}'. Valid: {', '.join(DATASET_SYNCS)}")
+        DATASET_SYNCS[SYNC_TARGET]()
+        refresh_matviews()
+    else:
+        # Default run: reference tables first (fact tables logically depend on them)
+        sync_ports()
+        sync_chokepoints()
+        sync_port_activity()
+        sync_chokepoint_activity()
+        sync_disruptions()
 
-    if LOAD_STATIC_DATASETS:
-        sync_spillover_port_impact()
-        sync_spillover_country_trade_impact()
-        sync_spillover_supplychain_impact()
-        sync_climate_port_risk()
-        sync_climate_trade_risk()
+        if LOAD_STATIC_DATASETS:
+            # Each of these is multi-million rows and can take a long time; running
+            # all 5 sequentially risks the job timeout (as happened in practice --
+            # supplychain got cut off mid-load). Load them one SYNC_TARGET per run instead.
+            print(
+                "NOTE: LOAD_STATIC_DATASETS=true runs all 5 static datasets sequentially "
+                "and may exceed the job timeout on a large table. Prefer running each via "
+                "SYNC_TARGET=<name> in its own workflow trigger.",
+                file=sys.stderr,
+            )
+            sync_spillover_port_impact()
+            sync_spillover_country_trade_impact()
+            sync_spillover_supplychain_impact()
+            sync_climate_port_risk()
+            sync_climate_trade_risk()
 
-    refresh_matviews()
+        refresh_matviews()

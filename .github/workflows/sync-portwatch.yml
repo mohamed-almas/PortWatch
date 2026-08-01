@@ -13,10 +13,27 @@ on:
         required: false
         default: "30"
       load_static_datasets:
-        description: "Also (re)load Spillover Simulator + Climate Scenarios tables (~7M rows, static IMF snapshots). Don't combine with a large backfill in the same run -- it risks the 6h job timeout."
+        description: "Also (re)load all 5 Spillover/Climate tables sequentially. Prefer sync_target below instead -- this can exceed the job timeout on the larger tables."
         required: false
         default: "false"
         type: boolean
+      sync_target:
+        description: "Run ONLY this one dataset (recommended for static-dataset loads and backfills, so each run fits the time budget). Leave blank for the normal weekly run."
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - ports
+          - chokepoints
+          - port_activity
+          - chokepoint_activity
+          - disruptions
+          - spillover_port
+          - spillover_country_trade
+          - spillover_supplychain
+          - climate_port_risk
+          - climate_trade_risk
 
 jobs:
   sync:
@@ -37,4 +54,5 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SYNC_SINCE_DAYS: ${{ github.event.inputs.sync_since_days || '30' }}
           LOAD_STATIC_DATASETS: ${{ github.event.inputs.load_static_datasets || 'false' }}
+          SYNC_TARGET: ${{ github.event.inputs.sync_target || '' }}
         run: python scripts/sync_portwatch.py

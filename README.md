@@ -77,25 +77,45 @@ for data that isn't changing.
    your Pages config).
 
 3. **Backfill runs** — trigger manually from Actions → "Sync IMF PortWatch
-   data" → Run workflow, which now takes two inputs:
+   data" → Run workflow, which takes three inputs:
    - `sync_since_days` — days of port/chokepoint daily-activity history to
      pull. Default `30` (the normal weekly cadence, with margin for late
-     revisions). For a full historical
-     backfill (data goes back to ~2019), set a large value, e.g. `3000`.
-   - `load_static_datasets` — set to `true` to (re)load the 5 Spillover/
-     Climate tables (~6.95M rows combined).
+     revisions). For a full historical backfill (data goes back to ~2019),
+     set a large value, e.g. `3000`.
+   - `sync_target` — run **only** this one dataset instead of the full set.
+     **Use this for the 5 static Spillover/Climate tables** — load one per
+     run (`spillover_port`, `spillover_country_trade`,
+     `spillover_supplychain`, `climate_port_risk`, `climate_trade_risk`).
+   - `load_static_datasets` — runs all 5 static datasets sequentially in one
+     job. Left in for convenience but **not recommended**: it's what caused
+     `spillover_supplychain_impact` to get cut off at 2.56M/3.4M rows when
+     the job hit its timeout mid-load (a wholesale-reload table deletes the
+     old data before reloading, so a run that dies partway leaves the table
+     silently incomplete — no error surfaces, only a smaller-than-expected
+     row count). Since a dataset selected via `sync_target` fully replaces
+     itself in one paged pass, this failure mode goes away when you load
+     one dataset per run.
 
-   **Run these as separate triggers, not combined in one run.** A full
-   `sync_since_days=3000` backfill (~5.7M rows) is roughly 2–3 hours by
-   itself; adding `load_static_datasets=true` on top risks the 340-minute
-   job timeout. Recommended order:
-   1. First run: `sync_since_days=3000`, `load_static_datasets=false` — backfills port/chokepoint history.
-   2. Second run: `sync_since_days=30` (default), `load_static_datasets=true` — loads the static datasets once.
-   3. After that, the scheduled weekly runs use the defaults (`30`, `false`) and stay fast/cheap.
+   **Recommended order**, each as its own separate trigger:
+   1. `sync_since_days=3000` (leave `sync_target` blank) — backfills port/chokepoint history (~2–3 hrs).
+   2. `sync_target=spillover_port`
+   3. `sync_target=spillover_country_trade`
+   4. `sync_target=spillover_supplychain` (the big one, ~3.4M rows — give it its own run)
+   5. `sync_target=climate_port_risk`
+   6. `sync_target=climate_trade_risk`
+   7. After that, the scheduled weekly runs use the defaults (`sync_since_days=30`, no target) and stay fast/cheap.
 
-   If ArcGIS rate-limits a very large single run, narrow the backfill by
-   running `sync_since_days` at smaller values covering different windows
-   (the upsert on `(portid, date)` makes repeat/overlapping runs safe).
+   The sync script retries transient failures (ArcGIS 502s, connection
+   drops) with exponential backoff up to 6 attempts before giving up, so a
+   momentary blip no longer kills a multi-hour run outright. If a run does
+   fail partway through a wholesale-reload dataset, just re-run that same
+   `sync_target` — it deletes and fully reloads the table each time, so a
+   partial table from a failed run gets cleanly replaced.
+
+   If ArcGIS rate-limits a very large single run, narrow the port-activity
+   backfill by running `sync_since_days` at smaller values covering
+   different windows (the upsert on `(portid, date)` makes repeat/overlapping
+   runs safe).
 
 ## What's already provisioned
 
