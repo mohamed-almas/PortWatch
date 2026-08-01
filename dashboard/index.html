@@ -6,34 +6,58 @@
 <title>IMF PortWatch — Executive Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
     --bg: #0b1220; --panel: #131c2e; --text: #e8edf5; --muted: #8a97ab;
     --accent: #4da3ff; --up: #38c172; --down: #ef4444; --border: #223047;
+    --tab-active: #1a2740;
   }
   @media (prefers-color-scheme: light) {
-    :root { --bg: #f5f7fb; --panel: #ffffff; --text: #101828; --muted: #667085; --border: #e4e7ec; }
+    :root { --bg: #f5f7fb; --panel: #ffffff; --text: #101828; --muted: #667085; --border: #e4e7ec; --tab-active: #eef4ff; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
-  header { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+  header { padding: 16px 28px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
   header h1 { font-size: 18px; margin: 0; font-weight: 600; }
   header .sub { color: var(--muted); font-size: 13px; }
-  main { padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
-  .kpi-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  .kpi-value { font-size: 26px; font-weight: 650; margin-top: 6px; }
+  nav.tabs { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  nav.tabs button { background: none; border: none; color: var(--muted); padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--tab-active); }
+  nav.subtabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  nav.subtabs button { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 6px 12px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+  nav.subtabs button.active { color: var(--accent); border-color: var(--accent); }
+  main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .subpage { display: none; }
+  .subpage.active { display: block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+  .controls label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; text-transform: uppercase; letter-spacing: .03em; }
+  .controls select, .controls input { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; font-size: 13px; min-width: 130px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kpi-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-value { font-size: 23px; font-weight: 650; margin-top: 5px; }
   .kpi-delta { font-size: 12px; margin-top: 4px; }
   .up { color: var(--up); } .down { color: var(--down); }
-  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
-  .grid1 { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 16px; }
-  .panel-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
-  canvas { max-height: 320px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; }
+  .grid2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .grid1 { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }
+  .panel-title { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .panel-title .hint { font-weight: 400; color: var(--muted); font-size: 11px; }
+  canvas { max-height: 300px; }
+  .map { height: 380px; border-radius: 8px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel); cursor: pointer; }
+  .table-scroll { max-height: 340px; overflow-y: auto; }
   .status { font-size: 12px; color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.red { background: #ef444422; color: #ef4444; }
+  .badge.orange { background: #f2994a22; color: #f2994a; }
+  .badge.green { background: #38c17222; color: #38c172; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -41,196 +65,720 @@
 <header>
   <div>
     <h1>IMF PortWatch — Executive Dashboard</h1>
-    <div class="sub">Global port activity, chokepoint transits &amp; trade nowcast</div>
+    <div class="sub">Port &amp; chokepoint activity, disruptions, spillover risk, climate scenarios</div>
   </div>
   <div class="status" id="status">Loading…</div>
 </header>
 
+<nav class="tabs" id="mainTabs">
+  <button data-page="page-overview" class="active">Overview</button>
+  <button data-page="page-ports">Port Activity</button>
+  <button data-page="page-chokepoints">Chokepoints</button>
+  <button data-page="page-disruptions">Disruptions</button>
+  <button data-page="page-spillover">Spillover Simulator</button>
+  <button data-page="page-climate">Climate Scenarios</button>
+</nav>
+
 <main>
-  <div class="kpis" id="kpis"></div>
 
-  <div class="grid2">
-    <div class="card">
-      <p class="panel-title">Global daily trade volume estimate (import + export, metric tons)</p>
-      <canvas id="globalTradeChart"></canvas>
+  <!-- ============ OVERVIEW ============ -->
+  <section id="page-overview" class="page active">
+    <div class="kpis" id="ov-kpis"></div>
+    <div class="grid2">
+      <div class="card"><p class="panel-title">Global daily trade volume (import + export, metric tons)</p><canvas id="ovTradeChart"></canvas></div>
+      <div class="card"><p class="panel-title">Top 10 busiest ports <span class="hint">last 30 days, port calls</span></p><canvas id="ovPortsChart"></canvas></div>
     </div>
-    <div class="card">
-      <p class="panel-title">Top 10 busiest ports (last 30 days, port calls)</p>
-      <canvas id="topPortsChart"></canvas>
+    <div class="grid2">
+      <div class="card"><p class="panel-title">Chokepoint transits <span class="hint">last 30 days</span></p><canvas id="ovChokeChart"></canvas></div>
+      <div class="card"><p class="panel-title">Data freshness</p>
+        <div class="table-scroll"><table id="ov-refresh"><thead><tr><th>Dataset</th><th>Last run</th><th>Rows</th><th>Coverage</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <div class="grid2">
-    <div class="card">
-      <p class="panel-title">Chokepoint transits (last 30 days)</p>
-      <canvas id="chokepointChart"></canvas>
+  <!-- ============ PORT ACTIVITY ============ -->
+  <section id="page-ports" class="page">
+    <div class="controls">
+      <div><label>Level</label><select id="pa-level"><option value="global">Global</option><option value="region">Region</option><option value="country">Country</option><option value="port">Port</option></select></div>
+      <div id="pa-entity-wrap" style="display:none"><label id="pa-entity-label">Region</label><select id="pa-entity"></select></div>
+      <div><label>Cargo type</label><select id="pa-cargo">
+        <option value="">All</option><option value="_container">Container</option><option value="_dry_bulk">Dry Bulk</option>
+        <option value="_general_cargo">General Cargo</option><option value="_roro">RoRo</option><option value="_tanker">Tanker</option>
+      </select></div>
+      <div><label>Flow</label><select id="pa-flow"><option value="portcalls">Port calls</option><option value="import">Import (mt)</option><option value="export">Export (mt)</option></select></div>
+      <div><label>Trend window</label><select id="pa-range"><option value="90">90 days</option><option value="180" selected>180 days</option><option value="365">1 year</option><option value="1095">3 years</option><option value="9999">All history</option></select></div>
     </div>
-    <div class="card">
-      <p class="panel-title">Chokepoint utilization (transits vs. estimated capacity, latest day)</p>
-      <table id="chokepointTable">
-        <thead><tr><th>Chokepoint</th><th>Transits</th><th>Capacity</th><th>Util.</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <div class="kpis" id="pa-kpis"></div>
+    <div class="grid1"><div class="card"><p class="panel-title" id="pa-trend-title">Trend</p><canvas id="paTrendChart"></canvas></div></div>
+    <div class="grid2">
+      <div class="card"><p class="panel-title" id="pa-map-title">Map <span class="hint">last 30 days</span></p><div class="map" id="paMap"></div></div>
+      <div class="card"><p class="panel-title" id="pa-top-title">Top 15</p><canvas id="paTopChart"></canvas></div>
     </div>
-  </div>
+  </section>
 
-  <div class="grid1">
-    <div class="card">
-      <p class="panel-title">Data freshness</p>
-      <table id="refreshTable">
-        <thead><tr><th>Dataset</th><th>Last run</th><th>Rows</th><th>Coverage</th><th>Status</th></tr></thead>
-        <tbody></tbody>
-      </table>
+  <!-- ============ CHOKEPOINTS ============ -->
+  <section id="page-chokepoints" class="page">
+    <div class="controls">
+      <div><label>Level</label><select id="ck-level"><option value="global">Global</option><option value="single">Single chokepoint</option></select></div>
+      <div id="ck-entity-wrap" style="display:none"><label>Chokepoint</label><select id="ck-entity"></select></div>
+      <div><label>Cargo type</label><select id="ck-cargo">
+        <option value="">All</option><option value="_container">Container</option><option value="_dry_bulk">Dry Bulk</option>
+        <option value="_general_cargo">General Cargo</option><option value="_roro">RoRo</option><option value="_tanker">Tanker</option>
+      </select></div>
+      <div><label>Trend window</label><select id="ck-range"><option value="90">90 days</option><option value="180" selected>180 days</option><option value="365">1 year</option><option value="9999">All history</option></select></div>
     </div>
-  </div>
+    <div class="grid1"><div class="card"><p class="panel-title">Chokepoint transit trend</p><canvas id="ckTrendChart"></canvas></div></div>
+    <div class="grid2">
+      <div class="card"><p class="panel-title">Chokepoints <span class="hint">bubble size = transits, last 30d</span></p><div class="map" id="ckMap"></div></div>
+      <div class="card"><p class="panel-title">Utilization <span class="hint">transits vs. est. capacity, last 30d</span></p>
+        <div class="table-scroll"><table id="ck-table"><thead><tr><th>Chokepoint</th><th>Transits (30d)</th><th>Avg capacity</th><th>Util.</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DISRUPTIONS ============ -->
+  <section id="page-disruptions" class="page">
+    <div class="controls">
+      <div><label>Alert level</label><select id="ds-alert"><option value="">All</option></select></div>
+      <div><label>Event type</label><select id="ds-type"><option value="">All</option></select></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><p class="panel-title">Disruption events <span class="hint">GDACS-sourced</span></p><div class="map" id="dsMap"></div></div>
+      <div class="card"><p class="panel-title">Events <span id="ds-count" class="hint"></span></p>
+        <div class="table-scroll"><table id="ds-table"><thead><tr><th>Date</th><th>Type</th><th>Name</th><th>Country</th><th>Alert</th><th>Ports affected</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SPILLOVER SIMULATOR ============ -->
+  <section id="page-spillover" class="page">
+    <nav class="subtabs" id="sp-subtabs">
+      <button data-sub="sp-port" class="active">Port criticality</button>
+      <button data-sub="sp-country">Country exposure</button>
+    </nav>
+    <div id="sp-port" class="subpage active">
+      <div class="controls">
+        <div><label>Risk metric</label><select id="sp-port-metric">
+          <option value="total_capacity_at_risk">Port-to-port capacity at risk</option>
+          <option value="total_export_at_risk">Export value at risk</option>
+          <option value="total_import_at_risk">Import value at risk</option>
+          <option value="total_consumption_at_risk">Consumption at risk</option>
+          <option value="total_industryoutput_at_risk">Industry output at risk</option>
+        </select></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><p class="panel-title">Ports ranked by systemic criticality <span class="hint">bubble size = risk</span></p><div class="map" id="spPortMap"></div></div>
+        <div class="card"><p class="panel-title">Top 15 most critical ports</p><canvas id="spPortChart"></canvas></div>
+      </div>
+    </div>
+    <div id="sp-country" class="subpage">
+      <div class="controls">
+        <div><label>Exposure metric</label><select id="sp-country-metric">
+          <option value="total_capacity_at_risk">Capacity at risk</option>
+          <option value="total_export_at_risk">Export value at risk</option>
+          <option value="total_import_at_risk">Import value at risk</option>
+          <option value="total_consumption_at_risk">Consumption at risk</option>
+          <option value="total_industryoutput_at_risk">Industry output at risk</option>
+        </select></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><p class="panel-title">Country exposure choropleth</p><div class="map" id="spCountryMap"></div></div>
+        <div class="card"><p class="panel-title">Top 15 most exposed countries</p><canvas id="spCountryChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CLIMATE SCENARIOS ============ -->
+  <section id="page-climate" class="page">
+    <nav class="subtabs" id="cl-subtabs">
+      <button data-sub="cl-port" class="active">Port physical risk</button>
+      <button data-sub="cl-trade">Trade risk by port</button>
+      <button data-sub="cl-country">Trade risk by country</button>
+    </nav>
+    <div id="cl-port" class="subpage active">
+      <div class="controls">
+        <div><label>Scenario</label><select id="cl-scenario"></select></div>
+        <div><label>Hazard</label><select id="cl-hazard"></select></div>
+        <div><label>Measure</label><select id="cl-measure"></select></div>
+      </div>
+      <div class="grid1"><div class="card"><p class="panel-title" id="cl-port-title">Port climate risk</p><div class="map" id="clPortMap"></div></div></div>
+    </div>
+    <div id="cl-trade" class="subpage">
+      <div class="controls"><div><label>Scenario</label><select id="clt-scenario"></select></div></div>
+      <div class="grid2">
+        <div class="card"><p class="panel-title">Trade value at risk by port</p><div class="map" id="cltPortMap"></div></div>
+        <div class="card"><p class="panel-title">Top 15 ports by trade value at risk</p><canvas id="cltPortChart"></canvas></div>
+      </div>
+    </div>
+    <div id="cl-country" class="subpage">
+      <div class="controls"><div><label>Scenario</label><select id="clc-scenario"></select></div></div>
+      <div class="grid2">
+        <div class="card"><p class="panel-title">Trade value at risk by country</p><div class="map" id="clcCountryMap"></div></div>
+        <div class="card"><p class="panel-title">Top 15 countries by trade value at risk</p><canvas id="clcCountryChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <script>
-// Read-only anon key, scoped by RLS to SELECT only on imf_* tables.
 const SUPABASE_URL = "https://jeuqpnhajmatekbzlfne.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_S5hBqEO4xEqmTuW0N_H4Sg_Is6pPfgh";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const fmt = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
-const pct = (n) => n == null ? "—" : `${(n * 100).toFixed(1)}%`;
-
-async function loadKpis(globalDaily) {
-  const el = document.getElementById("kpis");
-  if (!globalDaily.length) { el.innerHTML = `<div class="card">No data yet — waiting on first sync run.</div>`; return; }
-  const latest = globalDaily[globalDaily.length - 1];
-  const weekAgo = globalDaily[Math.max(0, globalDaily.length - 8)];
-  const deltaCalls = weekAgo.portcalls ? ((latest.portcalls - weekAgo.portcalls) / weekAgo.portcalls) : null;
-  const deltaTrade = weekAgo.total_trade ? ((latest.total_trade - weekAgo.total_trade) / weekAgo.total_trade) : null;
-
-  const cards = [
-    { label: "Latest data date", value: latest.date },
-    { label: "Global port calls (day)", value: fmt(latest.portcalls), delta: deltaCalls },
-    { label: "Global trade volume (day, mt)", value: fmt(latest.total_trade), delta: deltaTrade },
-    { label: "Import / Export (day, mt)", value: `${fmt(latest.import)} / ${fmt(latest.export)}` },
-  ];
-  el.innerHTML = cards.map(c => `
-    <div class="card">
-      <div class="kpi-label">${c.label}</div>
-      <div class="kpi-value">${c.value}</div>
-      ${c.delta != null ? `<div class="kpi-delta ${c.delta >= 0 ? 'up' : 'down'}">${c.delta >= 0 ? '▲' : '▼'} ${pct(Math.abs(c.delta))} vs 7d ago</div>` : ""}
-    </div>
-  `).join("");
+// PostgREST enforces a server-side max-rows cap (1000 on this project) that a
+// client-side .limit() cannot override -- paginate with .range() to get more.
+async function fetchAll(buildQuery, hardCap = 100000) {
+  const pageSize = 1000;
+  let offset = 0;
+  let all = [];
+  while (offset < hardCap) {
+    const { data, error } = await buildQuery(sb).range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
 }
 
-function lineChart(ctx, labels, datasets) {
-  return new Chart(ctx, {
-    type: "line",
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: datasets.length > 1 } },
-      scales: { y: { beginAtZero: false } },
-    },
+const fmt = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const fmt1 = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 1 });
+const pct = (n) => n == null ? "—" : `${(n * 100).toFixed(1)}%`;
+const setStatus = (t) => document.getElementById("status").textContent = t;
+
+// ---------------------------------------------------------------------
+// Tab navigation
+// ---------------------------------------------------------------------
+const pageLoaders = {};
+document.querySelectorAll("#mainTabs button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#mainTabs button").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    const page = document.getElementById(btn.dataset.page);
+    page.classList.add("active");
+    if (pageLoaders[btn.dataset.page] && !page.dataset.loaded) {
+      page.dataset.loaded = "1";
+      pageLoaders[btn.dataset.page]();
+    }
+    // Leaflet maps need a resize kick when their container becomes visible
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
+  });
+});
+function wireSubtabs(navId) {
+  document.querySelectorAll(`#${navId} button`).forEach(btn => {
+    btn.addEventListener("click", () => {
+      const nav = document.getElementById(navId);
+      nav.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      nav.parentElement.querySelectorAll(".subpage").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.sub).classList.add("active");
+      setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
+    });
   });
 }
+wireSubtabs("sp-subtabs");
+wireSubtabs("cl-subtabs");
 
-async function main() {
-  const status = document.getElementById("status");
+// ---------------------------------------------------------------------
+// Shared: world country boundaries (for choropleths), fetched once
+// ---------------------------------------------------------------------
+let worldGeoJson = null;
+async function getWorldGeoJson() {
+  if (worldGeoJson) return worldGeoJson;
+  const resp = await fetch("https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson");
+  worldGeoJson = await resp.json();
+  return worldGeoJson;
+}
+function iso3Of(feature) {
+  const p = feature.properties || {};
+  return p.ISO_A3 || p.ISO_A3_EH || p.iso_a3 || p.ADM0_A3 || null;
+}
+function colorScale(value, max) {
+  if (!value || !max) return "#2a3a54";
+  const t = Math.min(1, value / max);
+  // interpolate a muted blue -> accent blue -> warm amber for a readable dark-mode-friendly ramp
+  const stops = [[42,58,84], [77,163,255], [242,153,74]];
+  const seg = t < 0.5 ? 0 : 1;
+  const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+  const a = stops[seg], b = stops[seg + 1];
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * localT));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+async function renderChoropleth(mapId, mapRegistry, dataByIso3, opts = {}) {
+  const geo = await getWorldGeoJson();
+  if (mapRegistry[mapId]) { mapRegistry[mapId].remove(); }
+  const map = L.map(mapId, { worldCopyJump: true }).setView([20, 10], 2);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 8,
+  }).addTo(map);
+  const values = Object.values(dataByIso3).filter(v => v != null);
+  const max = values.length ? Math.max(...values) : 0;
+  L.geoJSON(geo, {
+    style: (feature) => {
+      const iso3 = iso3Of(feature);
+      const v = dataByIso3[iso3];
+      return { fillColor: colorScale(v, max), weight: 0.5, color: "#0b1220", fillOpacity: v ? 0.85 : 0.15 };
+    },
+    onEachFeature: (feature, layer) => {
+      const iso3 = iso3Of(feature);
+      const v = dataByIso3[iso3];
+      const name = feature.properties.ADMIN || feature.properties.name || iso3;
+      layer.bindPopup(`<b>${name}</b><br>${opts.label || "Value"}: ${v != null ? fmt(v) : "no data"}`);
+    },
+  }).addTo(map);
+  mapRegistry[mapId] = map;
+  return map;
+}
+function renderBubbleMap(mapId, mapRegistry, points, opts = {}) {
+  if (mapRegistry[mapId]) { mapRegistry[mapId].remove(); }
+  const map = L.map(mapId, { worldCopyJump: true }).setView([20, 10], 2);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 10,
+  }).addTo(map);
+  const values = points.map(p => p.value).filter(v => v != null && v > 0);
+  const max = values.length ? Math.max(...values) : 1;
+  points.forEach(p => {
+    if (p.lat == null || p.lon == null) return;
+    const r = 3 + 15 * Math.sqrt((p.value || 0) / max);
+    const marker = L.circleMarker([p.lat, p.lon], {
+      radius: r, color: opts.color || "#4da3ff", weight: 1, fillOpacity: 0.55,
+    }).addTo(map);
+    marker.bindPopup(`<b>${p.label}</b><br>${opts.metricLabel || "Value"}: ${fmt(p.value)}${p.extra || ""}`);
+  });
+  mapRegistry[mapId] = map;
+  return map;
+}
+const maps = {}; // registry so we can .remove() and recreate on filter change
+
+function barChart(canvasId, chartRegistry, labels, data, opts = {}) {
+  if (chartRegistry[canvasId]) chartRegistry[canvasId].destroy();
+  chartRegistry[canvasId] = new Chart(document.getElementById(canvasId), {
+    type: "bar",
+    data: { labels, datasets: [{ label: opts.label || "", data, backgroundColor: opts.color || "#4da3ff" }] },
+    options: { indexAxis: "y", plugins: { legend: { display: false } }, scales: { y: { ticks: { autoSkip: false } } } },
+  });
+}
+function lineChart(canvasId, chartRegistry, labels, datasets, opts = {}) {
+  if (chartRegistry[canvasId]) chartRegistry[canvasId].destroy();
+  chartRegistry[canvasId] = new Chart(document.getElementById(canvasId), {
+    type: "line",
+    data: { labels, datasets },
+    options: { responsive: true, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: datasets.length > 1 } }, scales: { y: { beginAtZero: false } } },
+  });
+}
+const charts = {};
+
+// ---------------------------------------------------------------------
+// OVERVIEW
+// ---------------------------------------------------------------------
+async function loadOverview() {
   try {
     const [{ data: globalDaily, error: e1 }, { data: refreshLog, error: e2 }] = await Promise.all([
-      sb.from("imf_mv_global_daily").select("*").order("date", { ascending: true }).limit(180),
-      sb.from("imf_refresh_log").select("*").order("run_at", { ascending: false }).limit(10),
+      sb.from("imf_mv_global_daily").select("*").order("date", { ascending: true }).limit(370),
+      sb.from("imf_refresh_log").select("*").order("run_at", { ascending: false }).limit(12),
     ]);
     if (e1) throw e1;
 
-    await loadKpis(globalDaily || []);
-
+    const el = document.getElementById("ov-kpis");
     if (globalDaily && globalDaily.length) {
-      lineChart(
-        document.getElementById("globalTradeChart"),
-        globalDaily.map(d => d.date),
-        [{ label: "Total trade (mt)", data: globalDaily.map(d => d.total_trade), borderColor: "#4da3ff", tension: .25, pointRadius: 0 }]
-      );
+      const latest = globalDaily[globalDaily.length - 1];
+      const weekAgo = globalDaily[Math.max(0, globalDaily.length - 8)];
+      const deltaCalls = weekAgo.portcalls ? ((latest.portcalls - weekAgo.portcalls) / weekAgo.portcalls) : null;
+      const deltaTrade = weekAgo.total_trade ? ((latest.total_trade - weekAgo.total_trade) / weekAgo.total_trade) : null;
+      el.innerHTML = [
+        { label: "Latest data date", value: latest.date },
+        { label: "Global port calls (day)", value: fmt(latest.portcalls), delta: deltaCalls },
+        { label: "Global trade volume (day, mt)", value: fmt(latest.total_trade), delta: deltaTrade },
+        { label: "Import / Export (day, mt)", value: `${fmt(latest.import)} / ${fmt(latest.export)}` },
+      ].map(c => `<div class="card"><div class="kpi-label">${c.label}</div><div class="kpi-value">${c.value}</div>
+        ${c.delta != null ? `<div class="kpi-delta ${c.delta >= 0 ? 'up' : 'down'}">${c.delta >= 0 ? '▲' : '▼'} ${pct(Math.abs(c.delta))} vs 7d ago</div>` : ""}</div>`).join("");
+      lineChart("ovTradeChart", charts, globalDaily.map(d => d.date),
+        [{ label: "Total trade (mt)", data: globalDaily.map(d => d.total_trade), borderColor: "#4da3ff", tension: .25, pointRadius: 0 }]);
+    } else {
+      el.innerHTML = `<div class="card">No data yet.</div>`;
     }
 
-    // Top ports last 30 days
     const since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-    const { data: recentActivity, error: e3 } = await sb
-      .from("imf_port_activity")
-      .select("portid, portcalls")
-      .gte("date", since30);
-    if (e3) throw e3;
-    const byPort = {};
-    (recentActivity || []).forEach(r => { byPort[r.portid] = (byPort[r.portid] || 0) + (r.portcalls || 0); });
-    const topPortIds = Object.entries(byPort).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    if (topPortIds.length) {
-      const { data: portNames } = await sb.from("imf_ports").select("portid, portname").in("portid", topPortIds.map(p => p[0]));
-      const nameMap = Object.fromEntries((portNames || []).map(p => [p.portid, p.portname]));
-      new Chart(document.getElementById("topPortsChart"), {
-        type: "bar",
-        data: {
-          labels: topPortIds.map(([id]) => nameMap[id] || id),
-          datasets: [{ label: "Port calls (30d)", data: topPortIds.map(([, v]) => v), backgroundColor: "#4da3ff" }],
-        },
-        options: { indexAxis: "y", plugins: { legend: { display: false } } },
-      });
+    const { data: recentActivity } = await sb.from("imf_mv_port_recent_summary").select("portname, portcalls_30d").order("portcalls_30d", { ascending: false }).limit(10);
+    if (recentActivity) {
+      barChart("ovPortsChart", charts, recentActivity.map(r => r.portname), recentActivity.map(r => r.portcalls_30d), { label: "Port calls (30d)" });
     }
 
-    // Chokepoints
-    const { data: chokeDaily, error: e4 } = await sb
-      .from("imf_mv_chokepoint_daily")
-      .select("*")
-      .gte("date", since30)
-      .order("date", { ascending: true });
-    if (e4) throw e4;
+    const { data: chokeDaily } = await sb.from("imf_mv_chokepoint_daily").select("*").gte("date", since30).order("date", { ascending: true }).limit(5000);
     if (chokeDaily && chokeDaily.length) {
       const dates = [...new Set(chokeDaily.map(d => d.date))].sort();
       const byChoke = {};
       chokeDaily.forEach(d => { (byChoke[d.portname] ||= {})[d.date] = d.n_total; });
-      const topChokeNames = Object.entries(byChoke)
-        .map(([name, series]) => [name, Object.values(series).reduce((a, b) => a + (b || 0), 0)])
-        .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name]) => name);
+      const top = Object.entries(byChoke).map(([n, s]) => [n, Object.values(s).reduce((a, b) => a + (b || 0), 0)])
+        .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([n]) => n);
       const palette = ["#4da3ff", "#38c172", "#f2994a", "#eb5757", "#9b51e0", "#2d9cdb"];
-      lineChart(
-        document.getElementById("chokepointChart"),
-        dates,
-        topChokeNames.map((name, i) => ({
-          label: name,
-          data: dates.map(d => byChoke[name][d] ?? null),
-          borderColor: palette[i % palette.length],
-          tension: .25, pointRadius: 0,
-        }))
-      );
-
-      // Latest-day utilization table
-      const latestDate = dates[dates.length - 1];
-      const latestRows = chokeDaily.filter(d => d.date === latestDate)
-        .sort((a, b) => (b.n_total || 0) - (a.n_total || 0));
-      document.querySelector("#chokepointTable tbody").innerHTML = latestRows.map(r => `
-        <tr>
-          <td>${r.portname}</td>
-          <td>${fmt(r.n_total)}</td>
-          <td>${fmt(r.capacity)}</td>
-          <td>${r.capacity ? pct(r.n_total / r.capacity) : "—"}</td>
-        </tr>
-      `).join("");
+      lineChart("ovChokeChart", charts, dates, top.map((name, i) => ({
+        label: name, data: dates.map(d => byChoke[name][d] ?? null), borderColor: palette[i % palette.length], tension: .25, pointRadius: 0,
+      })));
     }
 
-    // Freshness table
-    document.querySelector("#refreshTable tbody").innerHTML = (refreshLog || []).map(r => `
-      <tr>
-        <td>${r.dataset}</td>
-        <td>${new Date(r.run_at).toLocaleString()}</td>
-        <td>${fmt(r.row_count)}</td>
-        <td>${r.min_date || "—"} → ${r.max_date || "—"}</td>
-        <td>${r.status || "—"}</td>
-      </tr>
-    `).join("");
+    document.querySelector("#ov-refresh tbody").innerHTML = (refreshLog || []).map(r => `
+      <tr><td>${r.dataset}</td><td>${new Date(r.run_at).toLocaleString()}</td><td>${fmt(r.row_count)}</td>
+        <td>${r.min_date || "—"} → ${r.max_date || "—"}</td><td>${r.status || "—"}</td></tr>`).join("");
 
-    status.textContent = `Loaded ${new Date().toLocaleString()}`;
+    setStatus(`Loaded ${new Date().toLocaleString()}`);
   } catch (err) {
     console.error(err);
-    status.textContent = "Failed to load — see console.";
+    setStatus("Failed to load overview — see console.");
   }
 }
 
-main();
+// ---------------------------------------------------------------------
+// PORT ACTIVITY
+// ---------------------------------------------------------------------
+let portList = [], countryList = [], regionList = [];
+async function loadPortActivityControls() {
+  const [ports, countries, regions] = await Promise.all([
+    fetchAll(s => s.from("imf_ports").select("portid, portname, country").order("portname")),
+    fetchAll(s => s.from("imf_mv_country_daily").select("iso3, country").order("iso3")),
+    fetchAll(s => s.from("imf_mv_region_daily").select("region").order("region")),
+  ]);
+  portList = ports;
+  countryList = [...new Map(countries.map(c => [c.iso3, c.country])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  regionList = [...new Set(regions.map(r => r.region).filter(Boolean))].sort();
+
+  document.getElementById("pa-entity").dataset.filled = "";
+}
+
+function fillPaEntitySelect(level) {
+  const sel = document.getElementById("pa-entity");
+  const wrap = document.getElementById("pa-entity-wrap");
+  const label = document.getElementById("pa-entity-label");
+  sel.innerHTML = "";
+  if (level === "global") { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  if (level === "region") {
+    label.textContent = "Region";
+    sel.innerHTML = regionList.map(r => `<option value="${r}">${r}</option>`).join("");
+  } else if (level === "country") {
+    label.textContent = "Country";
+    sel.innerHTML = countryList.map(([iso3, name]) => `<option value="${iso3}">${name}</option>`).join("");
+  } else if (level === "port") {
+    label.textContent = "Port";
+    sel.innerHTML = portList.map(p => `<option value="${p.portid}">${p.portname} (${p.country})</option>`).join("");
+  }
+}
+
+async function refreshPortActivity() {
+  const level = document.getElementById("pa-level").value;
+  const entity = document.getElementById("pa-entity").value;
+  const cargo = document.getElementById("pa-cargo").value; // "", "_container", ...
+  const flow = document.getElementById("pa-flow").value; // portcalls / import / export
+  const rangeDays = parseInt(document.getElementById("pa-range").value, 10);
+  const since = new Date(Date.now() - rangeDays * 864e5).toISOString().slice(0, 10);
+  const col = flow === "portcalls" ? `portcalls${cargo}` : `${flow}${cargo}`;
+
+  let rows = [];
+  let title = "Global";
+  if (level === "global") {
+    // imf_mv_global_daily only has base columns (no cargo split) -- fall back gracefully
+    const full = await fetchAll(s => s.from("imf_mv_global_daily").select("*").gte("date", since).order("date"), 5000);
+    rows = full.map(r => ({ date: r.date, v: cargo ? null : r[flow === "portcalls" ? "portcalls" : flow] }));
+    title = "Global";
+  } else if (level === "region") {
+    title = entity || "Region";
+    const data = await fetchAll(s => s.from("imf_mv_region_daily").select("*").eq("region", entity).gte("date", since).order("date"), 5000);
+    rows = data.map(r => ({ date: r.date, v: r[col] }));
+  } else if (level === "country") {
+    const found = countryList.find(([iso3]) => iso3 === entity);
+    title = found ? found[1] : entity;
+    const data = await fetchAll(s => s.from("imf_mv_country_daily").select("*").eq("iso3", entity).gte("date", since).order("date"), 5000);
+    rows = data.map(r => ({ date: r.date, v: r[col] }));
+  } else if (level === "port") {
+    const found = portList.find(p => p.portid === entity);
+    title = found ? found.portname : entity;
+    const data = await fetchAll(s => s.from("imf_port_activity").select("*").eq("portid", entity).gte("date", since).order("date"), 5000);
+    rows = data.map(r => ({ date: r.date, v: r[col] }));
+  }
+
+  document.getElementById("pa-trend-title").textContent = `${title} — ${document.getElementById("pa-flow").selectedOptions[0].text}${cargo ? " · " + document.getElementById("pa-cargo").selectedOptions[0].text : ""}`;
+  lineChart("paTrendChart", charts, rows.map(r => r.date), [{ label: title, data: rows.map(r => r.v), borderColor: "#4da3ff", tension: .2, pointRadius: 0 }]);
+
+  // KPIs
+  const kpiEl = document.getElementById("pa-kpis");
+  if (rows.length) {
+    const latest = rows[rows.length - 1];
+    const weekAgo = rows[Math.max(0, rows.length - 8)];
+    const delta = weekAgo.v ? ((latest.v - weekAgo.v) / weekAgo.v) : null;
+    kpiEl.innerHTML = `
+      <div class="card"><div class="kpi-label">Latest date</div><div class="kpi-value">${latest.date}</div></div>
+      <div class="card"><div class="kpi-label">Latest value</div><div class="kpi-value">${fmt(latest.v)}</div>
+        ${delta != null ? `<div class="kpi-delta ${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '▲' : '▼'} ${pct(Math.abs(delta))} vs 7d ago</div>` : ""}</div>
+      <div class="card"><div class="kpi-label">Window total</div><div class="kpi-value">${fmt(rows.reduce((a, r) => a + (r.v || 0), 0))}</div></div>
+      <div class="card"><div class="kpi-label">Window avg / day</div><div class="kpi-value">${fmt(rows.reduce((a, r) => a + (r.v || 0), 0) / rows.length)}</div></div>`;
+  } else {
+    kpiEl.innerHTML = "";
+  }
+
+  // Map + top-N: country level -> choropleth of last 30d; port level -> bubble map; else hide/skip gracefully
+  const mapTitle = document.getElementById("pa-map-title");
+  const topTitle = document.getElementById("pa-top-title");
+  if (level === "country" || level === "global" || level === "region") {
+    mapTitle.innerHTML = `Country choropleth <span class="hint">last 30 days, ${document.getElementById("pa-flow").selectedOptions[0].text}</span>`;
+    const since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    const cd = await fetchAll(s => s.from("imf_mv_country_daily").select("*").gte("date", since30).order("iso3"), 10000);
+    const byIso3 = {};
+    cd.forEach(r => { byIso3[r.iso3] = (byIso3[r.iso3] || 0) + (r[col] || 0); });
+    await renderChoropleth("paMap", maps, byIso3, { label: document.getElementById("pa-flow").selectedOptions[0].text });
+
+    topTitle.textContent = "Top 15 countries (30d)";
+    const top = Object.entries(byIso3).sort((a, b) => b[1] - a[1]).slice(0, 15);
+    const nameByIso3 = Object.fromEntries(countryList);
+    barChart("paTopChart", charts, top.map(([iso3]) => nameByIso3[iso3] || iso3), top.map(([, v]) => v), { label: "Total" });
+  } else if (level === "port") {
+    mapTitle.innerHTML = `Port bubble map <span class="hint">last 30 days</span>`;
+    const ps = await fetchAll(s => s.from("imf_mv_port_recent_summary").select("*").order("portid"), 3000);
+    const metricCol = flow === "portcalls" ? "portcalls_30d" : flow === "import" ? "import_30d" : "export_30d";
+    const points = ps.map(p => ({ lat: p.lat, lon: p.lon, value: p[metricCol], label: p.portname, extra: `<br>${p.country}` }));
+    renderBubbleMap("paMap", maps, points, { metricLabel: document.getElementById("pa-flow").selectedOptions[0].text });
+
+    topTitle.textContent = "Top 15 ports (30d)";
+    const top = (ps || []).slice().sort((a, b) => (b[metricCol] || 0) - (a[metricCol] || 0)).slice(0, 15);
+    barChart("paTopChart", charts, top.map(p => p.portname), top.map(p => p[metricCol]), { label: "Total" });
+  }
+}
+
+document.getElementById("pa-level").addEventListener("change", (e) => { fillPaEntitySelect(e.target.value); refreshPortActivity(); });
+["pa-entity", "pa-cargo", "pa-flow", "pa-range"].forEach(id => document.getElementById(id).addEventListener("change", refreshPortActivity));
+
+async function loadPortActivity() {
+  try {
+    await loadPortActivityControls();
+    fillPaEntitySelect(document.getElementById("pa-level").value);
+    await refreshPortActivity();
+  } catch (err) { console.error(err); }
+}
+
+// ---------------------------------------------------------------------
+// CHOKEPOINTS
+// ---------------------------------------------------------------------
+let chokepointList = [];
+async function loadChokepointControls() {
+  const { data } = await sb.from("imf_chokepoints").select("portid, portname").order("portname");
+  chokepointList = data || [];
+  document.getElementById("ck-entity").innerHTML = chokepointList.map(c => `<option value="${c.portid}">${c.portname}</option>`).join("");
+}
+
+async function refreshChokepoints() {
+  const level = document.getElementById("ck-level").value;
+  const entity = document.getElementById("ck-entity").value;
+  const cargo = document.getElementById("ck-cargo").value;
+  const rangeDays = parseInt(document.getElementById("ck-range").value, 10);
+  const since = new Date(Date.now() - rangeDays * 864e5).toISOString().slice(0, 10);
+  const col = `n_total`; // n_total has no cargo split in the base table other than these columns
+  const cargoCol = cargo ? `n${cargo}` : "n_total";
+
+  const data = await fetchAll(s => s.from("imf_mv_chokepoint_daily").select("*").gte("date", since).order("date").order("portid"), 80000);
+  let rows = data;
+  if (level === "single" && entity) rows = rows.filter(r => r.portid === entity);
+
+  const dates = [...new Set(rows.map(r => r.date))].sort();
+  if (level === "single") {
+    const byDate = {};
+    rows.forEach(r => { byDate[r.date] = r.n_total; });
+    lineChart("ckTrendChart", charts, dates, [{ label: chokepointList.find(c => c.portid === entity)?.portname || entity, data: dates.map(d => byDate[d] ?? null), borderColor: "#4da3ff", tension: .2, pointRadius: 0 }]);
+  } else {
+    const byChoke = {};
+    rows.forEach(r => { (byChoke[r.portname] ||= {})[r.date] = r.n_total; });
+    const top = Object.entries(byChoke).map(([n, s]) => [n, Object.values(s).reduce((a, b) => a + (b || 0), 0)])
+      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n]) => n);
+    const palette = ["#4da3ff", "#38c172", "#f2994a", "#eb5757", "#9b51e0", "#2d9cdb", "#f7d154", "#56ccf2"];
+    lineChart("ckTrendChart", charts, dates, top.map((name, i) => ({
+      label: name, data: dates.map(d => byChoke[name][d] ?? null), borderColor: palette[i % palette.length], tension: .2, pointRadius: 0,
+    })));
+  }
+
+  const { data: summary } = await sb.from("imf_mv_chokepoint_recent_summary").select("*").order("transits_30d", { ascending: false });
+  const points = (summary || []).map(s => ({
+    lat: s.lat, lon: s.lon, label: s.portname,
+    value: cargo ? s[`transits${cargo}_30d`] : s.transits_30d,
+    extra: `<br>Avg capacity: ${fmt(s.avg_capacity)}`,
+  }));
+  renderBubbleMap("ckMap", maps, points, { color: "#f2994a", metricLabel: "Transits (30d)" });
+
+  document.querySelector("#ck-table tbody").innerHTML = (summary || []).map(s => {
+    const util = s.avg_capacity ? (s.transits_30d / 30) / s.avg_capacity : null;
+    return `<tr><td>${s.portname}</td><td>${fmt(s.transits_30d)}</td><td>${fmt1(s.avg_capacity)}</td><td>${util != null ? pct(util) : "—"}</td></tr>`;
+  }).join("");
+}
+
+document.getElementById("ck-level").addEventListener("change", (e) => {
+  document.getElementById("ck-entity-wrap").style.display = e.target.value === "single" ? "" : "none";
+  refreshChokepoints();
+});
+["ck-entity", "ck-cargo", "ck-range"].forEach(id => document.getElementById(id).addEventListener("change", refreshChokepoints));
+
+async function loadChokepoints() {
+  try { await loadChokepointControls(); await refreshChokepoints(); } catch (err) { console.error(err); }
+}
+
+// ---------------------------------------------------------------------
+// DISRUPTIONS
+// ---------------------------------------------------------------------
+let disruptionRows = [];
+function alertBadge(level) {
+  const l = (level || "").toLowerCase();
+  if (l.includes("red")) return `<span class="badge red">Red</span>`;
+  if (l.includes("orange")) return `<span class="badge orange">Orange</span>`;
+  if (l.includes("green")) return `<span class="badge green">Green</span>`;
+  return level || "—";
+}
+async function refreshDisruptions() {
+  const alertFilter = document.getElementById("ds-alert").value;
+  const typeFilter = document.getElementById("ds-type").value;
+  let rows = disruptionRows;
+  if (alertFilter) rows = rows.filter(r => r.alertlevel === alertFilter);
+  if (typeFilter) rows = rows.filter(r => r.eventtype === typeFilter);
+  rows = rows.slice().sort((a, b) => (b.fromdate || "").localeCompare(a.fromdate || ""));
+
+  document.getElementById("ds-count").textContent = `${rows.length} events`;
+  document.querySelector("#ds-table tbody").innerHTML = rows.map(r => `
+    <tr><td>${r.fromdate || "—"}</td><td>${r.eventtype || "—"}</td><td>${r.eventname || "—"}</td>
+      <td>${(r.country || "").split(";")[0]}</td><td>${alertBadge(r.alertlevel)}</td><td>${fmt(r.n_affectedports)}</td></tr>`).join("");
+
+  const points = rows.filter(r => r.lat != null && r.long != null).map(r => ({
+    lat: r.lat, lon: r.long, label: r.eventname || r.eventtype,
+    value: r.n_affectedports || 1,
+    extra: `<br>${r.fromdate || ""}${r.country ? " · " + r.country.split(";")[0] : ""}`,
+  }));
+  const colorByAlert = { Red: "#ef4444", Orange: "#f2994a", Green: "#38c172" };
+  if (maps["dsMap"]) maps["dsMap"].remove();
+  const map = L.map("dsMap", { worldCopyJump: true }).setView([20, 10], 2);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 10 }).addTo(map);
+  const maxV = Math.max(1, ...points.map(p => p.value));
+  points.forEach((p, i) => {
+    const r = rows[i];
+    const color = colorByAlert[r.alertlevel] || "#4da3ff";
+    const radius = 4 + 12 * Math.sqrt(p.value / maxV);
+    L.circleMarker([p.lat, p.lon], { radius, color, weight: 1, fillOpacity: 0.6 })
+      .bindPopup(`<b>${p.label}</b>${p.extra}<br>Ports affected: ${fmt(p.value)}`).addTo(map);
+  });
+  maps["dsMap"] = map;
+}
+["ds-alert", "ds-type"].forEach(id => document.getElementById(id).addEventListener("change", refreshDisruptions));
+
+async function loadDisruptions() {
+  try {
+    const { data, error } = await sb.from("imf_disruptions").select("*");
+    if (error) throw error;
+    disruptionRows = data || [];
+    const alerts = [...new Set(disruptionRows.map(r => r.alertlevel).filter(Boolean))].sort();
+    const types = [...new Set(disruptionRows.map(r => r.eventtype).filter(Boolean))].sort();
+    document.getElementById("ds-alert").innerHTML = `<option value="">All</option>` + alerts.map(a => `<option>${a}</option>`).join("");
+    document.getElementById("ds-type").innerHTML = `<option value="">All</option>` + types.map(t => `<option>${t}</option>`).join("");
+    await refreshDisruptions();
+  } catch (err) { console.error(err); }
+}
+
+// ---------------------------------------------------------------------
+// SPILLOVER SIMULATOR
+// ---------------------------------------------------------------------
+async function refreshSpilloverPort() {
+  const metric = document.getElementById("sp-port-metric").value;
+  const { data } = await sb.from("imf_mv_spillover_port_summary").select("*").order(metric, { ascending: false }).limit(300);
+  const rows = data || [];
+  const points = rows.map(r => ({ lat: r.lat, lon: r.lon, value: r[metric], label: r.portname, extra: `<br>${r.country}` }));
+  renderBubbleMap("spPortMap", maps, points, { color: "#eb5757", metricLabel: document.getElementById("sp-port-metric").selectedOptions[0].text });
+  const top = rows.slice(0, 15);
+  barChart("spPortChart", charts, top.map(r => r.portname), top.map(r => r[metric]), { label: document.getElementById("sp-port-metric").selectedOptions[0].text, color: "#eb5757" });
+}
+async function refreshSpilloverCountry() {
+  const metric = document.getElementById("sp-country-metric").value;
+  const { data } = await sb.from("imf_mv_spillover_country_exposure").select("*").limit(2000);
+  const rows = data || [];
+  const byIso3 = Object.fromEntries(rows.map(r => [r.iso3, r[metric]]));
+  await renderChoropleth("spCountryMap", maps, byIso3, { label: document.getElementById("sp-country-metric").selectedOptions[0].text });
+  const top = rows.slice().sort((a, b) => (b[metric] || 0) - (a[metric] || 0)).slice(0, 15);
+  barChart("spCountryChart", charts, top.map(r => r.country), top.map(r => r[metric]), { label: document.getElementById("sp-country-metric").selectedOptions[0].text, color: "#eb5757" });
+}
+document.getElementById("sp-port-metric").addEventListener("change", refreshSpilloverPort);
+document.getElementById("sp-country-metric").addEventListener("change", refreshSpilloverCountry);
+
+async function loadSpillover() {
+  try { await Promise.all([refreshSpilloverPort(), refreshSpilloverCountry()]); } catch (err) { console.error(err); }
+}
+
+// ---------------------------------------------------------------------
+// CLIMATE SCENARIOS
+// ---------------------------------------------------------------------
+async function loadClimateFilters() {
+  // imf_climate_port_risk and imf_climate_trade_risk use different scenario label
+  // schemes ("Present"/"RCP2.6" vs "present"/"rcp26") -- each dropdown must be
+  // populated from its own table's actual values, not shared.
+  const [{ data: portFilters, error: e1 }, { data: tradeScenarios, error: e2 }] = await Promise.all([
+    sb.from("imf_v_climate_port_risk_filters").select("*"),
+    sb.from("imf_v_climate_trade_risk_scenarios").select("*"),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+  const scenarios = [...new Set((portFilters || []).map(r => r.scenario))].sort();
+  const hazards = [...new Set((portFilters || []).map(r => r.hazard))].sort();
+  const measures = [...new Set((portFilters || []).map(r => r.measure))].sort();
+  const tScenarios = [...new Set((tradeScenarios || []).map(r => r.scenario))].sort();
+  const fill = (id, arr, def) => {
+    document.getElementById(id).innerHTML = arr.map(v => `<option${v === def ? " selected" : ""}>${v}</option>`).join("");
+  };
+  fill("cl-scenario", scenarios, "Present");
+  fill("cl-hazard", hazards, "All hazards total");
+  fill("cl-measure", measures, "Physical asset damages");
+  fill("clt-scenario", tScenarios, "present");
+  fill("clc-scenario", tScenarios, "present");
+}
+
+async function refreshClimatePort() {
+  const scenario = document.getElementById("cl-scenario").value;
+  const hazard = document.getElementById("cl-hazard").value;
+  const measure = document.getElementById("cl-measure").value;
+  document.getElementById("cl-port-title").innerHTML = `${scenario} · ${hazard} · ${measure} <span class="hint">bubble size = value</span>`;
+  const data = await fetchAll(s => s.from("imf_climate_port_risk").select("*").eq("scenario", scenario).eq("hazard", hazard).eq("measure", measure).order("portid"), 3000);
+  const points = (data || []).map(r => ({ lat: r.lat, lon: r.lon, value: r.value, label: r.portname, extra: `<br>${r.country}` }));
+  renderBubbleMap("clPortMap", maps, points, { color: "#f2994a", metricLabel: measure });
+}
+async function refreshClimateTradePort() {
+  const scenario = document.getElementById("clt-scenario").value;
+  const { data } = await sb.from("imf_mv_climate_trade_port_summary").select("*").eq("scenario", scenario).order("total_trade_value_at_risk", { ascending: false }).limit(300);
+  const rows = data || [];
+  const points = rows.map(r => ({ lat: r.to_lat, lon: r.to_lon, value: r.total_trade_value_at_risk, label: r.to_portname, extra: `<br>Avg downtime: ${fmt1(r.avg_days_downtime)} days` }));
+  renderBubbleMap("cltPortMap", maps, points, { color: "#f2994a", metricLabel: "Trade value at risk" });
+  const top = rows.slice(0, 15);
+  barChart("cltPortChart", charts, top.map(r => r.to_portname), top.map(r => r.total_trade_value_at_risk), { label: "Trade value at risk", color: "#f2994a" });
+}
+async function refreshClimateTradeCountry() {
+  const scenario = document.getElementById("clc-scenario").value;
+  const { data } = await sb.from("imf_mv_climate_trade_country_summary").select("*").eq("scenario", scenario).limit(2000);
+  const rows = data || [];
+  const byIso3 = Object.fromEntries(rows.map(r => [r.to_iso3, r.total_trade_value_at_risk]));
+  await renderChoropleth("clcCountryMap", maps, byIso3, { label: "Trade value at risk" });
+  const top = rows.slice().sort((a, b) => (b.total_trade_value_at_risk || 0) - (a.total_trade_value_at_risk || 0)).slice(0, 15);
+  barChart("clcCountryChart", charts, top.map(r => r.to_country), top.map(r => r.total_trade_value_at_risk), { label: "Trade value at risk", color: "#f2994a" });
+}
+["cl-scenario", "cl-hazard", "cl-measure"].forEach(id => document.getElementById(id).addEventListener("change", refreshClimatePort));
+document.getElementById("clt-scenario").addEventListener("change", refreshClimateTradePort);
+document.getElementById("clc-scenario").addEventListener("change", refreshClimateTradeCountry);
+
+async function loadClimate() {
+  try {
+    await loadClimateFilters();
+    await Promise.all([refreshClimatePort(), refreshClimateTradePort(), refreshClimateTradeCountry()]);
+  } catch (err) { console.error(err); }
+}
+
+// ---------------------------------------------------------------------
+pageLoaders["page-ports"] = loadPortActivity;
+pageLoaders["page-chokepoints"] = loadChokepoints;
+pageLoaders["page-disruptions"] = loadDisruptions;
+pageLoaders["page-spillover"] = loadSpillover;
+pageLoaders["page-climate"] = loadClimate;
+
+loadOverview();
 </script>
 </body>
 </html>

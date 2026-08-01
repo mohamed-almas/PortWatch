@@ -443,7 +443,11 @@ DATASET_SYNCS = {
 
 
 def refresh_matviews():
-    for mv in ("imf_mv_global_daily", "imf_mv_port_weekly", "imf_mv_chokepoint_daily"):
+    for mv in (
+        "imf_mv_global_daily", "imf_mv_port_weekly", "imf_mv_chokepoint_daily",
+        "imf_mv_country_daily", "imf_mv_region_daily",
+        "imf_mv_port_recent_summary", "imf_mv_chokepoint_recent_summary",
+    ):
         resp = SESSION.post(
             f"{SUPABASE_URL}/rest/v1/rpc/imf_refresh_matview",
             headers=SB_HEADERS,
