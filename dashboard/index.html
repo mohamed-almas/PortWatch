@@ -222,8 +222,8 @@
 </main>
 
 <script>
-const SUPABASE_URL = "https://jeuqpnhajmatekbzlfne.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_S5hBqEO4xEqmTuW0N_H4Sg_Is6pPfgh";
+const SUPABASE_URL = "__VITE_SUPABASE_URL__";
+const SUPABASE_ANON_KEY = "__VITE_SUPABASE_ANON_KEY__";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // PostgREST enforces a server-side max-rows cap (1000 on this project) that a
