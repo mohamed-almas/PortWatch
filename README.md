@@ -31,18 +31,29 @@ dashboard/index.html  ──PostgREST (anon key, read-only via RLS)──▶  Gi
 | `imf_ports`, `imf_chokepoints` | Ports/Chokepoints reference | full reload every run (small) |
 | `imf_port_activity`, `imf_chokepoint_activity` | Daily Port/Chokepoint Activity | rolling window (`SYNC_SINCE_DAYS`), upserted on `(portid, date)` |
 | `imf_disruptions` | GDACS-sourced Disruptions | full reload every run (~130 rows, ongoing events), upserted on `eventid` |
-| `imf_spillover_port_impact` | Spillover Simulator — port-to-port capacity at risk | **opt-in** (`LOAD_STATIC_DATASETS=true`), wholesale reload |
-| `imf_spillover_country_trade_impact` | Spillover Simulator — country import/export value at risk | opt-in, wholesale reload |
-| `imf_spillover_supplychain_impact` | Spillover Simulator — industry output/consumption at risk | opt-in, wholesale reload |
-| `imf_climate_port_risk` | Climate Scenarios — port-level climate risk | opt-in, wholesale reload |
-| `imf_climate_trade_risk` | Climate Scenarios — country trade risk | opt-in, wholesale reload |
+| `imf_spillover_port_impact` | Spillover Simulator — port-to-port capacity at risk | **weekly rotation** (1 of 5 per Saturday), wholesale reload |
+| `imf_spillover_country_trade_impact` | Spillover Simulator — country import/export value at risk | weekly rotation, wholesale reload |
+| `imf_spillover_supplychain_impact` | Spillover Simulator — industry output/consumption at risk | weekly rotation, wholesale reload |
+| `imf_climate_port_risk` | Climate Scenarios — port-level climate risk | weekly rotation, wholesale reload |
+| `imf_climate_trade_risk` | Climate Scenarios — country trade risk | weekly rotation, wholesale reload |
 
 The 5 Spillover/Climate tables are IMF-published **static snapshots**
 ("Last Updated April 3, 2024" on the source site, not touched by PortWatch's
 weekly refresh) with no natural unique key, so they're reloaded wholesale
-(delete-all + reinsert) rather than upserted, and are gated behind
-`LOAD_STATIC_DATASETS` so the default weekly run doesn't re-pull ~6.95M rows
-for data that isn't changing.
+(delete-all + reinsert) rather than upserted.
+
+They are too big to load together — ~6.95M rows combined overran the job
+timeout and left `imf_spillover_supplychain_impact` truncated mid-load, which
+is why they were originally gated behind `LOAD_STATIC_DATASETS` and then never
+ran at all. The `sync-static` job instead reloads **one** of them each Saturday,
+picked by ISO week number modulo 5, so every table is refreshed within any
+5-week window and each load gets a full job and timeout to itself.
+`LOAD_STATIC_DATASETS` is left in place for manual all-five runs, but nothing
+schedules it; to force a single dataset by hand, use the `sync_target` input.
+
+Because the reload is delete-all-then-insert, a run that fails midway leaves
+that one table short until the next cycle. `data_refresh_log` in Supabase
+surfaces that — its `last_refreshed_at` will not have advanced.
 
 ## Why this shape
 

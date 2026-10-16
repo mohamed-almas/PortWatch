@@ -6,6 +6,12 @@ on:
     # Run a few hours after to be safe, and re-check midweek in case of late corrections.
     - cron: "0 18 * * 2"  # Tuesday 18:00 UTC
     - cron: "0 6 * * 5"   # Friday 06:00 UTC (safety net for revisions)
+    # Saturday 02:00 UTC: reload ONE static dataset, rotating across the five on a
+    # 5-week cycle. They can't all run in one job -- ~6.95M rows combined overran
+    # the timeout and truncated supplychain mid-load -- and they're IMF snapshots
+    # that change rarely, so one per week keeps each run inside its budget and
+    # caps how long a republished snapshot goes unnoticed at 5 weeks.
+    - cron: "0 2 * * 6"
   workflow_dispatch:       # manual "Run workflow" button, with overrides
     inputs:
       sync_since_days:
@@ -37,6 +43,9 @@ on:
 
 jobs:
   sync:
+    # Tuesday/Friday refresh + any manual run. Skipped on the Saturday cron,
+    # which is the static-dataset rotation below.
+    if: github.event_name != 'schedule' || github.event.schedule != '0 2 * * 6'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
@@ -55,4 +64,39 @@ jobs:
           SYNC_SINCE_DAYS: ${{ github.event.inputs.sync_since_days || '30' }}
           LOAD_STATIC_DATASETS: ${{ github.event.inputs.load_static_datasets || 'false' }}
           SYNC_TARGET: ${{ github.event.inputs.sync_target || '' }}
+        run: python scripts/sync_portwatch.py
+
+  # One static dataset per week, rotating. Each gets a whole job (and the full
+  # timeout) to itself, which is what the sequential all-five run never had.
+  sync-static:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 2 * * 6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Pick this week's static dataset
+        id: pick
+        run: |
+          set -euo pipefail
+          TARGETS=(spillover_port spillover_country_trade spillover_supplychain \
+                   climate_port_risk climate_trade_risk)
+          # 10# forces base-10: ISO weeks 08 and 09 are invalid octal and would
+          # abort the run under `set -e`.
+          WEEK=$((10#$(date -u +%V)))
+          TARGET="${TARGETS[$((WEEK % 5))]}"
+          echo "ISO week $WEEK -> $TARGET"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Sync one static dataset -> Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SYNC_TARGET: ${{ steps.pick.outputs.target }}
         run: python scripts/sync_portwatch.py
