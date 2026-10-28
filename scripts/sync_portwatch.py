@@ -38,8 +38,9 @@ import requests
 
 ARCGIS_BASE = "https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services"
 PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1000)
-MAX_RETRIES = 6
-RETRY_BACKOFF_BASE = 2  # seconds: 2, 4, 8, 16, 32, 64
+MAX_RETRIES = 8
+RETRY_BACKOFF_BASE = 2
+RETRY_BACKOFF_CAP = 60  # seconds: 2, 4, 8, 16, 32, 60, 60 (~3 min total before giving up)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -70,7 +71,7 @@ def request_with_retry(method, url, **kwargs):
             last_exc = exc
             if attempt == MAX_RETRIES:
                 break
-            wait = RETRY_BACKOFF_BASE ** attempt
+            wait = min(RETRY_BACKOFF_BASE ** attempt, RETRY_BACKOFF_CAP)
             print(f"  request failed ({exc}), retrying in {wait}s (attempt {attempt}/{MAX_RETRIES})...", flush=True)
             time.sleep(wait)
     raise last_exc
@@ -101,7 +102,7 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
             # succeeds moments later, so this is retryable, not a real bad request.
             if attempt == MAX_RETRIES:
                 raise RuntimeError(f"ArcGIS error at offset {offset} after {MAX_RETRIES} attempts: {data['error']}")
-            wait = RETRY_BACKOFF_BASE ** attempt
+            wait = min(RETRY_BACKOFF_BASE ** attempt, RETRY_BACKOFF_CAP)
             print(f"  ArcGIS returned error at offset {offset} ({data['error']}), retrying in {wait}s "
                   f"(attempt {attempt}/{MAX_RETRIES})...", flush=True)
             time.sleep(wait)
@@ -467,12 +468,16 @@ if __name__ == "__main__":
         DATASET_SYNCS[SYNC_TARGET]()
         refresh_matviews()
     else:
-        # Default run: reference tables first (fact tables logically depend on them)
-        sync_ports()
-        sync_chokepoints()
-        sync_port_activity()
-        sync_chokepoint_activity()
-        sync_disruptions()
+        # Default run: reference tables first (fact tables logically depend on them).
+        # One dataset failing (ArcGIS outage) must not skip the others or the matview
+        # refresh -- collect failures, refresh, then exit nonzero so CI still goes red.
+        failures = []
+        for name in ("ports", "chokepoints", "port_activity", "chokepoint_activity", "disruptions"):
+            try:
+                DATASET_SYNCS[name]()
+            except Exception as exc:  # noqa: BLE001
+                print(f"FAILED {name}: {exc}", file=sys.stderr, flush=True)
+                failures.append(name)
 
         if LOAD_STATIC_DATASETS:
             # Each of these is multi-million rows and can take a long time; running
@@ -491,3 +496,5 @@ if __name__ == "__main__":
             sync_climate_trade_risk()
 
         refresh_matviews()
+        if failures:
+            raise SystemExit(f"Sync finished with failures: {', '.join(failures)}")
