@@ -38,9 +38,9 @@ import requests
 
 ARCGIS_BASE = "https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services"
 PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1000)
-MAX_RETRIES = 8
+MAX_RETRIES = 10
 RETRY_BACKOFF_BASE = 2
-RETRY_BACKOFF_CAP = 60  # seconds: 2, 4, 8, 16, 32, 60, 60 (~3 min total before giving up)
+RETRY_BACKOFF_CAP = 120  # seconds: 2, 4, 8, 16, 32, 64, 120, 120, 120 (~8 min before giving up)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -444,9 +444,11 @@ DATASET_SYNCS = {
 
 
 def refresh_matviews():
+    # Only the fast views. port_weekly / country_daily / region_daily (5.7M-row rollups)
+    # exceed the API's 8s statement_timeout, so pg_cron job
+    # `imf-refresh-matviews-daily` (22:00 UTC) refreshes everything in-database instead.
     for mv in (
-        "imf_mv_global_daily", "imf_mv_port_weekly", "imf_mv_chokepoint_daily",
-        "imf_mv_country_daily", "imf_mv_region_daily",
+        "imf_mv_global_daily", "imf_mv_chokepoint_daily",
         "imf_mv_port_recent_summary", "imf_mv_chokepoint_recent_summary",
     ):
         resp = SESSION.post(
