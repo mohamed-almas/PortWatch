@@ -79,17 +79,23 @@ def request_with_retry(method, url, **kwargs):
 
 def arcgis_pages(layer_url, where="1=1", out_fields="*"):
     """Page through an ArcGIS FeatureServer layer, yielding one page (list of
-    attribute dicts) at a time."""
-    offset = 0
+    attribute dicts) at a time.
+
+    Keyset pagination on ObjectId (`ObjectId > last`), not resultOffset. Daily_Ports_Data
+    (5.7M rows) indexes only ObjectId and portid, so `date >= X` + resultOffset=N forced a
+    full scan that skips N matches per page; cost grew with depth and ArcGIS answered with
+    junk errors ("Invalid URL", "Object reference not set"). The ObjectId range is indexed.
+    """
+    last_oid = 0
     while True:
         params = {
-            "where": where,
+            "where": f"({where}) AND ObjectId > {last_oid}",
             "outFields": out_fields,
             "f": "json",
-            "resultOffset": offset,
             "resultRecordCount": PAGE_SIZE,
             "orderByFields": "ObjectId",
         }
+        offset = f"after ObjectId {last_oid}"
         data = None
         for attempt in range(1, MAX_RETRIES + 1):
             resp = request_with_retry("GET", f"{layer_url}/query", params=params, timeout=60)
@@ -109,10 +115,11 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
         features = data.get("features", [])
         if not features:
             return
-        yield [f["attributes"] for f in features]
-        if len(features) < PAGE_SIZE:
+        attrs = [f["attributes"] for f in features]
+        yield attrs
+        last_oid = max(a["ObjectId"] for a in attrs)
+        if len(features) < PAGE_SIZE and not data.get("exceededTransferLimit"):
             return
-        offset += PAGE_SIZE
 
 
 def to_date_str(value):
