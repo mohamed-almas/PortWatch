@@ -41,6 +41,13 @@ PAGE_SIZE = 1000  # safe across all layers used here (lowest maxRecordCount is 1
 MAX_RETRIES = 10
 RETRY_BACKOFF_BASE = 2
 RETRY_BACKOFF_CAP = 120  # seconds: 2, 4, 8, 16, 32, 64, 120, 120, 120 (~8 min before giving up)
+MAX_QUOTA_RETRIES = 20   # HTTP 429 org quota: wait out "Retry after 60 sec" for ~22 min per request
+QUOTA_RETRY_WAIT = 65
+
+
+class ArcGISQuotaExceeded(RuntimeError):
+    """ArcGIS 429 persisted through every retry. Every dataset shares the org quota, so
+    the others would fail the same way -- the default run stops instead of burning ~40 min."""
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -97,7 +104,9 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
         }
         offset = f"after ObjectId {last_oid}"
         data = None
-        for attempt in range(1, MAX_RETRIES + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             resp = request_with_retry("GET", f"{layer_url}/query", params=params, timeout=60)
             resp.raise_for_status()
             data = resp.json()
@@ -106,11 +115,17 @@ def arcgis_pages(layer_url, where="1=1", out_fields="*"):
             # ArcGIS sometimes returns an in-body error (HTTP 200, JSON has "error")
             # on transient server-side hiccups -- confirmed the identical request
             # succeeds moments later, so this is retryable, not a real bad request.
-            if attempt == MAX_RETRIES:
-                raise RuntimeError(f"ArcGIS error at offset {offset} after {MAX_RETRIES} attempts: {data['error']}")
-            wait = min(RETRY_BACKOFF_BASE ** attempt, RETRY_BACKOFF_CAP)
-            print(f"  ArcGIS returned error at offset {offset} ({data['error']}), retrying in {wait}s "
-                  f"(attempt {attempt}/{MAX_RETRIES})...", flush=True)
+            err = data["error"]
+            quota = err.get("code") == 429
+            if attempt >= (MAX_QUOTA_RETRIES if quota else MAX_RETRIES):
+                msg = f"ArcGIS error {offset} after {attempt} attempts: {err}"
+                raise (ArcGISQuotaExceeded if quota else RuntimeError)(msg)
+            # 429 = IMF's org-wide 6000 units/min quota, saturated by other clients (it
+            # also fails from unrelated IPs on a 3-unit query). ArcGIS says "Retry after
+            # 60 sec", so wait that out rather than backing off exponentially.
+            wait = QUOTA_RETRY_WAIT if quota else min(RETRY_BACKOFF_BASE ** attempt, RETRY_BACKOFF_CAP)
+            print(f"  ArcGIS returned error {offset} ({err}), retrying in {wait}s "
+                  f"(attempt {attempt}/{MAX_QUOTA_RETRIES if quota else MAX_RETRIES})...", flush=True)
             time.sleep(wait)
         features = data.get("features", [])
         if not features:
@@ -484,6 +499,11 @@ if __name__ == "__main__":
         for name in ("ports", "chokepoints", "port_activity", "chokepoint_activity", "disruptions"):
             try:
                 DATASET_SYNCS[name]()
+            except ArcGISQuotaExceeded as exc:
+                print(f"FAILED {name}: {exc}\nSkipping remaining datasets: the 429 quota is org-wide.",
+                      file=sys.stderr, flush=True)
+                failures.append(name)
+                break
             except Exception as exc:  # noqa: BLE001
                 print(f"FAILED {name}: {exc}", file=sys.stderr, flush=True)
                 failures.append(name)
