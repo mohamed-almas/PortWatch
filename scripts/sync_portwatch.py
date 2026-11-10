@@ -58,9 +58,12 @@ SYNC_TARGET = os.environ.get("SYNC_TARGET", "").strip()
 SESSION = requests.Session()
 SB_HEADERS = {
     "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
 }
+# Legacy service_role keys are JWTs and go in Authorization too; new sb_secret_ keys are not JWTs
+# and must be sent only in apikey.
+if SUPABASE_KEY.startswith("eyJ"):
+    SB_HEADERS["Authorization"] = f"Bearer {SUPABASE_KEY}"
 
 
 def request_with_retry(method, url, **kwargs):
@@ -196,11 +199,15 @@ def log_run(dataset, row_count, min_date=None, max_date=None, status="ok", notes
 def sync_stream(label, layer_url, transform, table, on_conflict=None, where="1=1", wholesale=False):
     """Generic paged sync: fetch page -> transform -> upsert page, immediately,
     without ever holding the full result set in memory."""
-    if wholesale:
-        supabase_delete_all(table)
+    # Wholesale: delete only after the first page has been fetched successfully, so an
+    # ArcGIS outage (429/5xx) raises before the delete and leaves the old data intact.
+    pending_delete = wholesale
     total = 0
     dates = []
     for page in arcgis_pages(layer_url, where=where):
+        if pending_delete:
+            supabase_delete_all(table)
+            pending_delete = False
         rows = [transform(a) for a in page]
         supabase_upsert_batch(table, rows, on_conflict=on_conflict)
         total += len(rows)
