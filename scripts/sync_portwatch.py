@@ -1,6 +1,6 @@
 """
 Pull IMF PortWatch data from the public ArcGIS FeatureServers and upsert into
-Supabase (project: Liner Services / jeuqpnhajmatekbzlfne, tables prefixed imf_).
+Supabase (project: Country Trade / qvtyjrnnqvxeprxkdcms, tables prefixed imf_).
 
 No local storage of the source data -- this streams ArcGIS query pages
 directly into Postgres via the Supabase REST API, one page at a time
@@ -8,7 +8,7 @@ directly into Postgres via the Supabase REST API, one page at a time
 multiple millions of rows).
 
 Env vars required:
-  SUPABASE_URL              e.g. https://jeuqpnhajmatekbzlfne.supabase.co
+  SUPABASE_URL              e.g. https://qvtyjrnnqvxeprxkdcms.supabase.co
   SUPABASE_SERVICE_ROLE_KEY service role key (server-side only, never expose client-side)
 
 Optional:

@@ -8,7 +8,7 @@ static executive dashboard from GitHub Pages that reads Supabase directly.
 ArcGIS FeatureServer (public, no auth)
         │  GitHub Actions cron (weekly + midweek safety net)
         ▼
-scripts/sync_portwatch.py  ──upsert/reload──▶  Supabase Postgres (project: Liner Services)
+scripts/sync_portwatch.py  ──upsert/reload──▶  Supabase Postgres (project: Country Trade)
                                           tables: imf_ports, imf_chokepoints,
                                                   imf_port_activity, imf_chokepoint_activity,
                                                   imf_disruptions,
@@ -21,7 +21,7 @@ scripts/sync_portwatch.py  ──upsert/reload──▶  Supabase Postgres (proj
                                                     imf_mv_port_weekly,
                                                     imf_mv_chokepoint_daily
         ▼
-dashboard/index.html  ──PostgREST (anon key, read-only via RLS)──▶  GitHub Pages
+dashboard/index.html  ──PostgREST (publishable key, read-only via RLS)──▶  GitHub Pages
 ```
 
 ## Datasets covered
@@ -70,13 +70,13 @@ surfaces that — its `last_refreshed_at` will not have advanced.
   plus a Friday safety-net run to catch late revisions, rather than polling
   constantly.
 - **Dashboard is a static file** — GitHub Pages, zero backend — talking to
-  Supabase with the public anon key, which RLS policies restrict to
-  `SELECT`-only on the `imf_*` tables.
+  Supabase with the publishable (anon) key. RLS currently grants `SELECT` on
+  the `imf_*` tables to signed-in users only (see "What's already provisioned").
 
 ## One-time setup
 
 1. **GitHub repo secrets** (Settings → Secrets and variables → Actions):
-   - `SUPABASE_URL` = `https://jeuqpnhajmatekbzlfne.supabase.co` — **exactly
+   - `SUPABASE_URL` = `https://qvtyjrnnqvxeprxkdcms.supabase.co` — **exactly
      this, no `/rest/v1` suffix** (the script appends that path itself; a
      doubled path causes a `PGRST125` failure).
    - `SUPABASE_SERVICE_ROLE_KEY` = the project's service_role key (Settings →
@@ -130,14 +130,18 @@ surfaces that — its `last_refreshed_at` will not have advanced.
 
 ## What's already provisioned
 
-- Supabase project: **Liner Services** (`jeuqpnhajmatekbzlfne`) — chosen
-  because it held the least data among existing projects. Tables/matviews
-  are prefixed `imf_` to stay clearly separated from that project's
-  existing `eesea_*` / `ml_liners_*` tables.
-- Schema + RLS read-only policies + `imf_refresh_matview()` helper function:
-  already applied via migration.
-- Dashboard anon key is already wired into `dashboard/index.html` (safe to
-  expose — RLS limits it to read-only on `imf_*`).
+- Supabase project: **Country Trade** (`qvtyjrnnqvxeprxkdcms`). Tables,
+  matviews and views are prefixed `imf_` to stay separate from the project's
+  other tables.
+- Schema, RLS policies and the `imf_refresh_matview()` / `imf_refresh_all_matviews()`
+  helper functions are applied via migrations (`imf_move_01` … `imf_move_06`).
+- **Access model:** RLS is on for every table. `authenticated` has read-only
+  access, `service_role` has full access, and `anon` has **no** access. The
+  publishable key in `dashboard/index.html` is the `anon` key, so the dashboard
+  can only read data once it signs a user in or an `anon` read policy is added.
+- A pg_cron job, `imf-refresh-matviews-daily` (22:00 UTC), refreshes all
+  matviews inside the database. The heavy rollups exceed the API's 8s
+  statement timeout if refreshed through the RPC.
 
 ## Extending the dashboard
 
@@ -157,11 +161,16 @@ activity tables — the disruptions/spillover/climate tables are synced and
 queryable but not yet wired into the dashboard UI. That's a follow-up, not
 done in this pass.
 
-## Note on the reused Supabase project
+## Moved from Maritime Shipping (2026-11-10)
 
-`jeuqpnhajmatekbzlfne` (Liner Services) already had 10 tables
-(`eesea_*`, `ref_tradelane_classification`) with RLS disabled and several
-`SECURITY DEFINER` functions callable by `anon`/`authenticated` — pre-existing,
-unrelated to this project. Both were hardened (RLS read-only policies added;
-functions switched to `SECURITY INVOKER` where the underlying data was
-already anon-readable) as part of this build, at the user's request.
+All `imf_*` tables were moved here from the **Maritime Shipping** project
+(`jeuqpnhajmatekbzlfne`, formerly "Liner Services") via `postgres_fdw` and a
+pg_cron copy job. Every table's row count matched the source, and per-row
+hashes of the two large static tables were identical. Matviews were rebuilt
+rather than copied.
+
+Two static tables were already **empty in the source** and were copied as
+empty: `imf_spillover_port_impact` and `imf_climate_trade_risk`. Their wholesale
+reload deletes the table before reloading, so a reload that fails (e.g. ArcGIS
+429) leaves it empty. Reload them with `scripts/load_csv.py` or the
+`sync_target` workflow input once ArcGIS recovers.
